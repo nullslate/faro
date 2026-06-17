@@ -2105,7 +2105,6 @@ impl CurrentCookieEntry {
 #[derive(Clone)]
 pub(crate) struct RequestTreeMeta {
     pub(crate) depth: usize,
-    pub(crate) label: String,
     pub(crate) group_key: Option<String>,
     pub(crate) ancestor_keys: Vec<String>,
     pub(crate) has_children: bool,
@@ -3105,10 +3104,6 @@ fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestTreeMeta> {
                 .unwrap_or(false);
             RequestTreeMeta {
                 depth: parts.len().saturating_sub(1),
-                label: parts
-                    .last()
-                    .cloned()
-                    .unwrap_or_else(|| domain_for_url(&request.request.url)),
                 group_key,
                 ancestor_keys,
                 has_children,

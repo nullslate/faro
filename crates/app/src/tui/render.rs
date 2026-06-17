@@ -560,7 +560,6 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                     Cell::from(request_tree_marker(
                         row_index,
                         total,
-                        request,
                         tree_meta.as_ref(),
                         fade,
                         theme,
@@ -602,7 +601,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     let table = Table::new(
         rows,
         [
-            Constraint::Length(24),
+            Constraint::Length(10),
             Constraint::Length(4),
             Constraint::Length(8),
             Constraint::Length(10),
@@ -2272,21 +2271,9 @@ fn color_rgb(color: Color) -> (u8, u8, u8) {
     }
 }
 
-fn status_glyph(request: &RequestView) -> &'static str {
-    match request.status_code() {
-        Some(200..=299) => "●",
-        Some(300..=399) => "↪",
-        Some(400..=499) => "▲",
-        Some(500..=599) => "■",
-        Some(_) => "◆",
-        None => "○",
-    }
-}
-
 fn request_tree_marker(
     row_index: usize,
     total: usize,
-    request: &RequestView,
     meta: Option<&RequestTreeMeta>,
     fade: RowFade,
     theme: &Theme,
@@ -2296,25 +2283,23 @@ fn request_tree_marker(
     let indent = meta
         .map(|meta| "  ".repeat(meta.depth.saturating_sub(1).min(6)))
         .unwrap_or_default();
-    let marker = meta
+    let (marker, marker_style) = meta
         .map(|meta| {
             if meta.has_children {
-                if meta.collapsed { "▸" } else { "▾" }
+                (
+                    if meta.collapsed { "▸" } else { "▾" },
+                    fade.accent_style(theme.panel_title),
+                )
             } else {
-                status_glyph(request)
+                ("•", fade.secondary_style(theme))
             }
         })
-        .unwrap_or_else(|| status_glyph(request));
-    let label = meta
-        .map(|meta| meta.label.clone())
-        .unwrap_or_else(|| path_for_url(&request.request.url));
+        .unwrap_or(("•", fade.secondary_style(theme)));
     Line::from(vec![
         Span::styled(branch.to_string(), branch_style),
         Span::styled("─".to_string(), fade.secondary_style(theme)),
         Span::raw(indent),
-        Span::styled(marker, status_style(request.status_code(), fade, theme)),
-        Span::raw(" "),
-        Span::styled(compact_value(&label, 14), fade.base_style(theme)),
+        Span::styled(marker, marker_style),
     ])
 }
 
