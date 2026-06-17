@@ -4,6 +4,8 @@ Faro is a terminal-first browser debugging workbench for frontend and full-stack
 
 It launches or attaches to a Chromium-family browser through the Chrome DevTools Protocol, captures browser observations into SQLite, and lets humans and agents inspect the result through a TUI, CLI, SQL, or MCP.
 
+![Faro terminal UI showing filtered network requests, request details, and a JSON response body.](assets/faro-tui.png)
+
 ```text
 Browser -> Chrome DevTools Protocol -> Faro capture -> SQLite -> TUI / CLI / MCP
 ```
