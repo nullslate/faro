@@ -3713,6 +3713,7 @@ fn build_curl_args(request: &RequestView) -> Vec<String> {
     let mut parts = vec![
         "-sS".to_string(),
         "-i".to_string(),
+        "--compressed".to_string(),
         "-X".to_string(),
         request.request.method.clone(),
         request.request.url.clone(),
@@ -3803,6 +3804,14 @@ mod tests {
             source.map(str::to_string),
             None,
         )
+    }
+
+    #[test]
+    fn curl_args_request_decoded_compressed_replay_output() {
+        let request = request_view();
+        let args = build_curl_args(&request);
+
+        assert!(args.iter().any(|arg| arg == "--compressed"));
     }
 
     #[test]

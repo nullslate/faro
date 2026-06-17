@@ -1685,6 +1685,7 @@ fn parse_edited_request(text: &str) -> Option<Vec<String>> {
     let mut args = vec![
         "-sS".to_string(),
         "-i".to_string(),
+        "--compressed".to_string(),
         "-X".to_string(),
         method.trim().to_string(),
         url.trim().to_string(),

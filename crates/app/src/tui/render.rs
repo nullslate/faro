@@ -2666,6 +2666,7 @@ fn syntax_body_lines_for_request(request: &RequestView, body: String) -> Vec<Lin
 }
 
 fn syntax_body_lines_with(body: String, syntax: BodySyntax) -> Vec<Line<'static>> {
+    let body = strip_terminal_controls(&body);
     match syntax {
         BodySyntax::Json if serde_json::from_str::<serde_json::Value>(&body).is_ok() => {
             body.lines().map(highlight_json_line).collect()
@@ -2679,6 +2680,52 @@ fn syntax_body_lines_with(body: String, syntax: BodySyntax) -> Vec<Line<'static>
             .map(|line| Line::styled(line.to_string(), Style::default().fg(GB_FG)))
             .collect(),
     }
+}
+
+fn strip_terminal_controls(value: &str) -> String {
+    let mut cleaned = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            strip_escape_sequence(&mut chars);
+            continue;
+        }
+        if ch.is_control() && !matches!(ch, '\n' | '\r' | '\t') {
+            continue;
+        }
+        cleaned.push(ch);
+    }
+    cleaned
+}
+
+fn strip_escape_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    let Some(next) = chars.peek().copied() else {
+        return;
+    };
+    if next == '[' {
+        let _ = chars.next();
+        for ch in chars.by_ref() {
+            if ('@'..='~').contains(&ch) {
+                break;
+            }
+        }
+        return;
+    }
+    if next == ']' {
+        let _ = chars.next();
+        let mut previous_escape = false;
+        for ch in chars.by_ref() {
+            if ch == '\u{7}' || (previous_escape && ch == '\\') {
+                break;
+            }
+            previous_escape = ch == '\u{1b}';
+        }
+        return;
+    }
+    let _ = chars.next();
 }
 
 fn body_syntax_for_request(request: &RequestView) -> BodySyntax {
@@ -3645,6 +3692,14 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans[0].content.as_ref(), "not-json: true");
+    }
+
+    #[test]
+    fn syntax_body_lines_strips_terminal_controls() {
+        let lines = syntax_body_lines("ok\u{1b}[31mred\u{1b}[0m\u{7}done".to_string());
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans[0].content.as_ref(), "okreddone");
     }
 
     #[test]

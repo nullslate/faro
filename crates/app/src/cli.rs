@@ -1181,6 +1181,7 @@ pub(crate) fn build_curl_args(request: &RequestRecord, request_body: Option<&str
     let mut parts = vec![
         "-sS".to_string(),
         "-i".to_string(),
+        "--compressed".to_string(),
         "-X".to_string(),
         request.method.clone(),
         request.url.clone(),
