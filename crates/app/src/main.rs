@@ -130,15 +130,22 @@ struct CliCurlCommand {
 fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
     let mut json_output = false;
     let mut filter = None;
+    let mut route = None;
     let mut iter = args.into_iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--json" => json_output = true,
             "--filter" => {
                 let Some(value) = iter.next() else {
-                    bail!("usage: devbench requests [--filter <expr>] [--json]");
+                    bail!("usage: devbench requests [--route <route>] [--filter <expr>] [--json]");
                 };
                 filter = Some(value);
+            }
+            "--route" => {
+                let Some(value) = iter.next() else {
+                    bail!("usage: devbench requests [--route <route>] [--filter <expr>] [--json]");
+                };
+                route = Some(value);
             }
             unknown => bail!("unknown requests option: {unknown}"),
         }
@@ -152,6 +159,10 @@ fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
         .into_iter()
         .filter(|row| match filter.as_deref() {
             Some(expr) => request_matches_filter(row, expr),
+            None => true,
+        })
+        .filter(|row| match route.as_deref() {
+            Some(route) => request_matches_route(&row.url, route),
             None => true,
         })
         .collect::<Vec<_>>();
@@ -720,6 +731,85 @@ fn request_matches_filter(row: &CliRequestRow, expr: &str) -> bool {
     request_contains(row, expr)
 }
 
+fn request_matches_route(url: &str, route: &str) -> bool {
+    let request_path = cli_path_for_url(url);
+    let route_path = cli_path_for_url(route);
+    if route_path.contains(':') || route_path.contains('*') {
+        return route_pattern_matches(&request_path, &route_path);
+    }
+    request_path == route_path
+        || request_path
+            .strip_prefix(&route_path)
+            .map(|tail| tail.starts_with('/'))
+            .unwrap_or(false)
+}
+
+fn route_pattern_matches(request_path: &str, route_path: &str) -> bool {
+    let request_segments = route_segments(request_path);
+    let route_segments = route_segments(route_path);
+    let mut request_index = 0;
+    for route_segment in &route_segments {
+        if *route_segment == "*" {
+            return true;
+        }
+        let Some(request_segment) = request_segments.get(request_index) else {
+            return false;
+        };
+        if route_segment.starts_with(':') {
+            request_index += 1;
+            continue;
+        }
+        if route_segment != request_segment {
+            return false;
+        }
+        request_index += 1;
+    }
+    request_index == request_segments.len()
+}
+
+fn route_segments(path: &str) -> Vec<&str> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
+fn cli_path_for_url(value: &str) -> String {
+    let without_fragment = value.split('#').next().unwrap_or(value);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    let path = if let Some(without_scheme) = without_query
+        .strip_prefix("http://")
+        .or_else(|| without_query.strip_prefix("https://"))
+    {
+        without_scheme
+            .split_once('/')
+            .map(|(_, path)| format!("/{path}"))
+            .unwrap_or_else(|| "/".to_string())
+    } else if without_query.starts_with('/') {
+        without_query.to_string()
+    } else {
+        format!("/{without_query}")
+    };
+    normalize_route_path(&path)
+}
+
+fn normalize_route_path(path: &str) -> String {
+    let trimmed = path.trim();
+    let with_leading_slash = if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    };
+    let without_trailing = with_leading_slash.trim_end_matches('/');
+    if without_trailing.is_empty() {
+        "/".to_string()
+    } else {
+        without_trailing.to_string()
+    }
+}
+
 fn parse_filter_expr(expr: &str) -> Option<(String, String, String)> {
     let operators = [">=", "<=", "==", "!=", ">", "<", "=", "contains", "~"];
     if let [field, op, value @ ..] = expr.split_whitespace().collect::<Vec<_>>().as_slice()
@@ -1036,7 +1126,7 @@ fn print_help() {
     println!("  devbench [--db <db-path>] --launch-on-start <http-url>");
     println!("  devbench tui [db-path]");
     println!("  devbench show [db-path]");
-    println!("  devbench requests [--filter <expr>] [--json]");
+    println!("  devbench requests [--route <route>] [--filter <expr>] [--json]");
     println!("  devbench request get <id> [--body] [--json]");
     println!("  devbench request curl <id> [--json]");
     println!("  devbench console errors [--json]");
@@ -1052,4 +1142,51 @@ fn print_help() {
     println!("  j/k   move focused selection");
     println!("  /     filter requests");
     println!("  c     clear request filter / console");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cli_path_for_url, request_matches_route};
+
+    #[test]
+    fn request_route_filter_matches_plain_route_and_descendants() {
+        assert!(request_matches_route(
+            "https://example.com/api/users",
+            "/api/users"
+        ));
+        assert!(request_matches_route(
+            "https://example.com/api/users/123",
+            "/api/users"
+        ));
+        assert!(!request_matches_route(
+            "https://example.com/api/user-settings",
+            "/api/users"
+        ));
+    }
+
+    #[test]
+    fn request_route_filter_matches_param_and_wildcard_patterns() {
+        assert!(request_matches_route(
+            "https://example.com/api/users/123",
+            "/api/users/:id"
+        ));
+        assert!(!request_matches_route(
+            "https://example.com/api/users/123/profile",
+            "/api/users/:id"
+        ));
+        assert!(request_matches_route(
+            "https://example.com/api/users/123/profile",
+            "/api/users/*"
+        ));
+    }
+
+    #[test]
+    fn cli_path_for_url_normalizes_urls_paths_and_queries() {
+        assert_eq!(cli_path_for_url("https://example.com"), "/");
+        assert_eq!(
+            cli_path_for_url("https://example.com/api/users?x=1"),
+            "/api/users"
+        );
+        assert_eq!(cli_path_for_url("api/users/"), "/api/users");
+    }
 }
