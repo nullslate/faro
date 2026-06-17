@@ -2117,6 +2117,7 @@ pub(crate) struct RequestTreeMeta {
     pub(crate) group_key: Option<String>,
     pub(crate) ancestor_keys: Vec<String>,
     pub(crate) has_children: bool,
+    pub(crate) child_count: usize,
     pub(crate) collapsed: bool,
 }
 
@@ -3097,25 +3098,26 @@ fn request_tree_parts(request: &RequestView) -> Vec<String> {
 }
 
 fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestTreeMeta> {
-    let descendant_groups = requests
-        .iter()
-        .flat_map(request_group_keys)
-        .collect::<HashSet<_>>();
+    let mut descendant_counts = HashMap::new();
+    for group in requests.iter().flat_map(request_group_keys) {
+        *descendant_counts.entry(group).or_insert(0) += 1;
+    }
     requests
         .iter()
         .map(|request| {
             let parts = request_tree_parts(request);
             let group_key = group_key_for_parts(&parts);
             let ancestor_keys = ancestor_keys_for_parts(&parts);
-            let has_children = group_key
+            let child_count = group_key
                 .as_ref()
-                .map(|key| descendant_groups.contains(key))
-                .unwrap_or(false);
+                .and_then(|key| descendant_counts.get(key).copied())
+                .unwrap_or(0);
             RequestTreeMeta {
                 depth: parts.len().saturating_sub(1),
                 group_key,
                 ancestor_keys,
-                has_children,
+                has_children: child_count > 0,
+                child_count,
                 collapsed: false,
             }
         })
@@ -3398,5 +3400,26 @@ mod tests {
             Some("localhost:5173/api/users".to_string())
         );
         assert_eq!(parent_group_key("localhost:5173/api"), None);
+    }
+
+    #[test]
+    fn request_tree_meta_counts_descendant_children() {
+        let mut parent = request_view();
+        parent.request.url = "http://localhost:5173/api/users".to_string();
+        let mut child = request_view();
+        child.request.url = "http://localhost:5173/api/users/123".to_string();
+        let metas = build_request_tree_metas(&[parent, child]);
+
+        let Some(parent_meta) = metas.first() else {
+            panic!("missing parent meta");
+        };
+        let Some(child_meta) = metas.get(1) else {
+            panic!("missing child meta");
+        };
+
+        assert!(parent_meta.has_children);
+        assert_eq!(parent_meta.child_count, 1);
+        assert!(!child_meta.has_children);
+        assert_eq!(child_meta.child_count, 0);
     }
 }

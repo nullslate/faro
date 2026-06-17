@@ -601,7 +601,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     let table = Table::new(
         rows,
         [
-            Constraint::Length(10),
+            Constraint::Length(14),
             Constraint::Length(4),
             Constraint::Length(8),
             Constraint::Length(10),
@@ -2334,14 +2334,19 @@ fn request_tree_marker(
         .map(|meta| {
             if meta.has_children {
                 (
-                    if meta.collapsed { "[▸]" } else { "[▾]" },
-                    fade.accent_style(theme.panel_title),
+                    format!(
+                        "[{} {:>2}]",
+                        if meta.collapsed { "▸" } else { "▾" },
+                        meta.child_count.min(99)
+                    ),
+                    fade.accent_style(theme.active_border)
+                        .add_modifier(Modifier::BOLD),
                 )
             } else {
-                (" · ", fade.secondary_style(theme))
+                ("  ·  ".to_string(), fade.secondary_style(theme))
             }
         })
-        .unwrap_or((" · ", fade.secondary_style(theme)));
+        .unwrap_or_else(|| ("  ·  ".to_string(), fade.secondary_style(theme)));
     Line::from(vec![
         Span::styled(branch.to_string(), branch_style),
         Span::styled("─".to_string(), fade.secondary_style(theme)),
