@@ -15,7 +15,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
+    Block, BorderType, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
 };
 
 const GB_FG: Color = Color::Rgb(235, 219, 178);
@@ -34,7 +34,7 @@ pub(crate) fn render(frame: &mut ratatui::Frame, app: &mut WorkbenchState) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(3),
             Constraint::Min(14),
             Constraint::Length(2),
         ])
@@ -148,18 +148,14 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let header_bg = Color::Rgb(29, 32, 33);
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(area);
-    let mut title_spans = vec![
-        Span::styled(
-            " faro ",
-            Style::default()
-                .fg(header_bg)
-                .bg(app.config.theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("  "),
-    ];
+    let mut title_spans = brand_spans(header_bg, app.config.theme.accent);
+    title_spans.push(Span::raw("  "));
     title_spans.extend(favicon_spans(app));
     title_spans.extend(if area.width < 90 {
         compact_header_spans(app)
@@ -170,9 +166,27 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let block = Paragraph::new(title).style(Style::default().bg(header_bg));
     frame.render_widget(block, rows[0]);
     frame.render_widget(
-        Paragraph::new(view_tabs_line(app)).style(Style::default().fg(GB_FG).bg(header_bg)),
+        Paragraph::new("").style(Style::default().bg(header_bg)),
         rows[1],
     );
+    frame.render_widget(
+        Paragraph::new(view_tabs_line(app)).style(Style::default().fg(GB_FG).bg(header_bg)),
+        rows[2],
+    );
+}
+
+fn brand_spans(header_bg: Color, accent: Color) -> Vec<Span<'static>> {
+    vec![
+        Span::styled("", Style::default().fg(accent).bg(header_bg)),
+        Span::styled(
+            "faro",
+            Style::default()
+                .fg(header_bg)
+                .bg(accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("", Style::default().fg(accent).bg(header_bg)),
+    ]
 }
 
 fn view_tabs_line(app: &WorkbenchState) -> Line<'static> {
@@ -229,20 +243,22 @@ fn view_tab_spans(
     let header_bg = Color::Rgb(29, 32, 33);
     if active {
         vec![
+            Span::styled("", Style::default().fg(theme.accent).bg(header_bg)),
             Span::styled(
-                format!(" {key} "),
+                format!("{key} "),
                 Style::default()
                     .fg(header_bg)
                     .bg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" {label} "),
+                label,
                 Style::default()
                     .fg(theme.text)
                     .bg(GB_BG2)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled("", Style::default().fg(GB_BG2).bg(header_bg)),
         ]
     } else {
         vec![Span::styled(
@@ -339,7 +355,7 @@ fn captured_favicon(app: &WorkbenchState) -> Option<(&str, &str)> {
 }
 
 fn render_network_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let line = Line::from(vec![
+    let mut line = Line::from(vec![
         Span::styled("filter", label_style()),
         Span::raw(" "),
         Span::raw(if app.request_filter.is_empty() {
@@ -366,15 +382,11 @@ fn render_network_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
                 .map(|ids| ids.len().to_string())
                 .unwrap_or_else(|| "-".to_string()),
         ),
-        Span::styled("   route ", muted_style()),
-        Span::raw(
-            app.active_request_route_breadcrumb()
-                .map(|route| compact_value(&route, 56))
-                .unwrap_or_else(|| "-".to_string()),
-        ),
         Span::raw("   "),
-        route_summary_span(app, 64),
     ]);
+    line.spans.extend(route_breadcrumb_spans(app, 56));
+    line.spans
+        .extend([Span::raw("   "), route_summary_span(app, 64)]);
     frame.render_widget(Paragraph::new(line).style(Style::default().fg(GB_FG)), area);
 }
 
@@ -397,16 +409,14 @@ fn render_network_compact_bar(frame: &mut ratatui::Frame, area: Rect, app: &Work
                 .map(|ids| ids.len().to_string())
                 .unwrap_or_else(|| "-".to_string()),
         ),
-        Span::styled("  route ", muted_style()),
-        Span::raw(
-            app.active_request_route_breadcrumb()
-                .map(|route| compact_value(&route, 36))
-                .unwrap_or_else(|| "-".to_string()),
-        ),
+        Span::raw("  "),
+    ];
+    spans.extend(route_breadcrumb_spans(app, 36));
+    spans.extend([
         Span::raw("  "),
         route_summary_span(app, 42),
         Span::raw("  "),
-    ];
+    ]);
     spans.append(&mut traffic_line.spans);
     spans.extend([
         Span::raw("  "),
@@ -553,18 +563,8 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                         )),
                         Cell::from(highlight_text(&request.request.method, &highlight_terms))
                             .style(method_style(&request.request.method, fade, theme)),
-                        Cell::from(resource_type_line(
-                            request,
-                            resource_label,
-                            &highlight_terms,
-                            fade,
-                            theme,
-                        ))
-                        .style(resource_style(
-                            &resource_type,
-                            fade,
-                            theme,
-                        )),
+                        Cell::from(resource_type_line(resource_label, &highlight_terms))
+                            .style(resource_style(&resource_type, fade, theme)),
                         Cell::from(highlight_text(&domain, &highlight_terms))
                             .style(fade.secondary_style(theme)),
                         Cell::from(highlight_text(&path, &highlight_terms)).style(base_style),
@@ -1606,6 +1606,7 @@ pub(super) fn panel_block(title: impl Into<String>, active: bool) -> Block<'stat
             panel_title_style(active),
         )))
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(active_border(active))
 }
 
@@ -1629,6 +1630,7 @@ pub(super) fn themed_panel_block(
     Block::default()
         .title(themed_title_line(&title, hotkey, title_color, theme))
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border_color))
 }
 
@@ -1824,6 +1826,31 @@ fn route_summary_span(app: &WorkbenchState, max_width: usize) -> Span<'static> {
         ),
         muted_style(),
     )
+}
+
+fn route_breadcrumb_spans(app: &WorkbenchState, max_width: usize) -> Vec<Span<'static>> {
+    let Some(route) = app.active_request_route_breadcrumb() else {
+        return vec![Span::styled("route ", muted_style()), Span::raw("-")];
+    };
+    let route = compact_value(&route, max_width);
+    let mut spans = vec![Span::styled("route ", muted_style())];
+    for (index, segment) in route
+        .split(" / ")
+        .filter(|segment| !segment.is_empty())
+        .enumerate()
+    {
+        if index > 0 {
+            spans.push(Span::styled(" › ", muted_style()));
+        }
+        spans.push(Span::styled(
+            format!(" {segment} "),
+            Style::default()
+                .fg(GB_GREEN)
+                .bg(GB_BG2)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
 }
 
 fn filter_highlight_terms(filter: &str) -> Vec<String> {
@@ -2205,47 +2232,8 @@ fn resource_label(resource_type: &str) -> &'static str {
     }
 }
 
-fn resource_type_line(
-    request: &RequestView,
-    resource_label: &str,
-    highlight_terms: &[String],
-    fade: RowFade,
-    theme: &Theme,
-) -> Line<'static> {
-    let mut line = highlight_text(resource_label, highlight_terms);
-    let mut badges = Vec::new();
-    if request.request.request_body_ref.is_some()
-        || request
-            .response
-            .as_ref()
-            .and_then(|response| response.body_size)
-            .is_some_and(|size| size > 0)
-    {
-        badges.push(("b", theme.resource_image));
-    }
-    if !request.replays.is_empty() {
-        badges.push(("r", theme.method_post));
-    }
-    if request
-        .response
-        .as_ref()
-        .is_some_and(|response| response.body_truncated)
-    {
-        badges.push(("!", theme.client_error));
-    }
-    if matches!(request.status_code(), Some(300..=399)) {
-        badges.push(("→", theme.redirect));
-    }
-    if !badges.is_empty() {
-        line.spans.push(Span::raw(" "));
-        for (badge, color) in badges {
-            line.spans.push(Span::styled(
-                badge.to_string(),
-                fade.accent_style(color).add_modifier(Modifier::BOLD),
-            ));
-        }
-    }
-    line
+fn resource_type_line(resource_label: &str, highlight_terms: &[String]) -> Line<'static> {
+    highlight_text(resource_label, highlight_terms)
 }
 
 fn duration_style(duration: Option<i64>, fade: RowFade, theme: &Theme) -> Style {

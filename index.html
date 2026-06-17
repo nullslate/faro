@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Faro</title>
+  <meta name="description" content="Faro is a keyboard-first browser debugging workbench for network requests, console logs, storage, cookies, WebSockets, scripts, SQL, CLI, and MCP workflows.">
+  <style>
+    :root {
+      --site: #16181a;
+      --bg: #1d2021;
+      --bg-dark: #141617;
+      --panel: #1f2223;
+      --row: #282a2b;
+      --border: #2c2f31;
+      --line: #3a3a36;
+      --text: #ebdbb2;
+      --dim: #bdae93;
+      --muted: #928374;
+      --faint: #665c54;
+      --title: #d8a657;
+      --blue: #7daea3;
+      --green: #a9b665;
+      --red: #ea6962;
+      --orange: #e78a4e;
+      --purple: #d3869b;
+      --accent: #89b482;
+      --shadow: rgba(0, 0, 0, .36);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 50% -10%, rgba(137, 180, 130, .14), transparent 34rem),
+        radial-gradient(circle at 15% 25%, rgba(216, 166, 87, .08), transparent 28rem),
+        var(--site);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    a { color: inherit; }
+    code, pre, .mono { font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace; }
+
+    .wrap {
+      width: min(1120px, calc(100% - 48px));
+      margin: 0 auto;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: rgba(22, 24, 26, .86);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-height: 58px;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      text-decoration: none;
+      font-weight: 800;
+      letter-spacing: .01em;
+    }
+
+    .brand-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 18px rgba(137, 180, 130, .75);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .nav-links a {
+      text-decoration: none;
+    }
+
+    .nav-links a:hover {
+      color: var(--text);
+    }
+
+    .hero {
+      padding: 82px 0 38px;
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: .15em;
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      max-width: 880px;
+      color: var(--text);
+      font-size: clamp(42px, 7vw, 82px);
+      line-height: .95;
+      letter-spacing: -.04em;
+    }
+
+    .lead {
+      max-width: 710px;
+      margin: 24px 0 0;
+      color: var(--dim);
+      font-size: 18px;
+      line-height: 1.65;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 32px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 18px;
+      border-radius: 9px;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 14px;
+      border: 1px solid var(--line);
+    }
+
+    .button.primary {
+      color: var(--site);
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .button.secondary {
+      color: var(--text);
+      background: rgba(31, 34, 35, .78);
+    }
+
+    .shot-shell {
+      margin-top: 48px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(31, 34, 35, .96), rgba(20, 22, 23, .98));
+      box-shadow: 0 30px 90px var(--shadow);
+      overflow: hidden;
+    }
+
+    .shot-image {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: var(--bg);
+    }
+
+    .muted { color: var(--muted); }
+    .blue { color: var(--blue); }
+    .title { color: var(--title); }
+
+    .section {
+      padding: 86px 0 0;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      color: var(--text);
+      font-size: clamp(30px, 4vw, 44px);
+      letter-spacing: -.03em;
+    }
+
+    .section-copy {
+      max-width: 650px;
+      color: var(--dim);
+      line-height: 1.65;
+      font-size: 16px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 30px;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 22px;
+    }
+
+    .card-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--accent);
+      margin-bottom: 16px;
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      color: var(--text);
+      font-size: 16px;
+    }
+
+    .card p {
+      margin: 0;
+      color: var(--dim);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .terminal {
+      margin-top: 28px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--bg-dark);
+      overflow: hidden;
+    }
+
+    .terminal pre {
+      margin: 0;
+      padding: 18px;
+      color: var(--text);
+      line-height: 1.85;
+      font-size: 13px;
+      overflow-x: auto;
+    }
+
+    footer {
+      margin-top: 88px;
+      padding: 34px 0 52px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      .wrap { width: min(100% - 28px, 1120px); }
+      .nav-links { display: none; }
+      .hero { padding-top: 56px; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="#top"><span class="brand-dot"></span><span class="mono">faro</span></a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#agents">Agents</a>
+        <a href="#cli">CLI</a>
+        <a href="#install">Install</a>
+      </div>
+    </div>
+  </nav>
+
+  <main id="top">
+    <section class="wrap hero">
+      <div class="eyebrow mono">Browser debugging for keyboard people</div>
+      <h1>DevTools data in a local workbench your agents can use.</h1>
+      <p class="lead">Faro captures Chromium network traffic, console output, storage, cookies, WebSockets, replay data, scripts, and read-only SQL into a durable SQLite database with a fast terminal UI, CLI, and MCP server.</p>
+      <div class="actions">
+        <a class="button primary" href="#install">Quick start</a>
+        <a class="button secondary" href="#cli">CLI examples</a>
+      </div>
+
+      <div class="shot-shell">
+        <img class="shot-image" src="assets/faro-tui.png" alt="Faro terminal UI showing a filtered network request list, request detail pane, and syntax-highlighted JSON response body.">
+      </div>
+    </section>
+
+    <section id="features" class="wrap section">
+      <div class="eyebrow mono">Features</div>
+      <h2>Everything useful from DevTools, without leaving the terminal.</h2>
+      <p class="section-copy">Faro is intentionally narrow: browser investigation, request replay, storage inspection, scripts, and database-backed debugging.</p>
+      <div class="grid">
+        <article class="card"><div class="card-icon mono">⊟</div><h3>Network workbench</h3><p>Route drilldown, regex filters, presets, response bodies, curl export, replay, and request timing in one navigable view.</p></article>
+        <article class="card"><div class="card-icon mono">›_</div><h3>Console and eval</h3><p>Inspect logs, errors, warnings, stack traces, and run JavaScript through your configured editor workflow.</p></article>
+        <article class="card"><div class="card-icon mono">⇅</div><h3>WebSocket frames</h3><p>Stream sent and received frames with opcode labels, payload inspection, JSON formatting, and filtering.</p></article>
+        <article class="card"><div class="card-icon mono">▤</div><h3>Storage and cookies</h3><p>View and edit localStorage, sessionStorage, and cookies with two-pane details and editor handoff.</p></article>
+        <article class="card"><div class="card-icon mono">▦</div><h3>Read-only SQL</h3><p>Query the capture database safely from the TUI, CLI, scripts, or MCP without mutating the store.</p></article>
+        <article class="card"><div class="card-icon mono">ƒ</div><h3>Scripts</h3><p>Save and run Rhai scripts against Faro data and browser capabilities for repeatable investigations.</p></article>
+      </div>
+    </section>
+
+    <section id="agents" class="wrap section">
+      <div class="eyebrow mono">Agents</div>
+      <h2>Your coding agent can inspect the same capture.</h2>
+      <p class="section-copy">Faro exposes an agent-friendly CLI and a stdio MCP server for listing requests, reading response bodies, replaying calls, inspecting console errors, querying storage, and running guarded SQL.</p>
+      <div class="terminal mono">
+        <pre>{
+  "mcpServers": {
+    "faro": { "command": "faro", "args": ["mcp"] }
+  }
+}</pre>
+      </div>
+    </section>
+
+    <section id="cli" class="wrap section">
+      <div class="eyebrow mono">CLI</div>
+      <h2>Useful without opening the TUI.</h2>
+      <div class="terminal mono">
+        <pre><span class="muted"># capture a page</span>
+$ faro capture http://localhost:5173 --for 15s --json
+
+<span class="muted"># inspect failing requests under a route</span>
+$ faro requests --route /api --filter "status &gt;= 400" --json
+
+<span class="muted"># copy a full reproducible request</span>
+$ faro request curl req_123
+
+<span class="muted"># query the SQLite capture</span>
+$ faro sql "select * from requests where status_code &gt;= 500"</pre>
+      </div>
+    </section>
+
+    <section id="install" class="wrap section">
+      <div class="eyebrow mono">Install</div>
+      <h2>Quick start from source.</h2>
+      <p class="section-copy">Requires stable Rust, a Chromium-family browser, and curl for replay workflows.</p>
+      <div class="terminal mono">
+        <pre>$ git clone https://github.com/nullslate/faro
+$ cd faro
+$ cargo install --path crates/app
+$ faro http://localhost:5173</pre>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap mono">faro · MIT licensed · faro-core · faro-store · faro-capture · faro-cdp</div>
+  </footer>
+</body>
+</html>
