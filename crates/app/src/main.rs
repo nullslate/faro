@@ -120,6 +120,13 @@ struct CliReplayResult {
     stderr: String,
 }
 
+#[derive(Debug, Serialize)]
+struct CliCurlCommand {
+    request_id: String,
+    command: String,
+    args: Vec<String>,
+}
+
 fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
     let mut json_output = false;
     let mut filter = None;
@@ -164,10 +171,16 @@ fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
 }
 
 fn handle_request(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
-    if args.first().map(String::as_str) != Some("get") {
-        bail!("usage: devbench request get <id> [--body] [--json]");
-    }
+    let Some(command) = args.first().cloned() else {
+        bail!("usage: devbench request <get|curl> <id> [--body] [--json]");
+    };
     args.remove(0);
+    if command == "curl" {
+        return handle_request_curl(db_path, args);
+    }
+    if command != "get" {
+        bail!("usage: devbench request <get|curl> <id> [--body] [--json]");
+    }
     let Some(request_id) = args.first().cloned() else {
         bail!("usage: devbench request get <id> [--body] [--json]");
     };
@@ -214,6 +227,36 @@ fn handle_request(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
             .map(|status| status.to_string())
             .unwrap_or_else(|| "-".to_string());
         println!("{} {} {} {}", row.id, row.method, status, row.url);
+    }
+    Ok(())
+}
+
+fn handle_request_curl(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
+    let Some(request_id) = args.first().cloned() else {
+        bail!("usage: devbench request curl <id> [--json]");
+    };
+    args.remove(0);
+    let json_output = args.iter().any(|arg| arg == "--json");
+    for arg in &args {
+        if arg != "--json" {
+            bail!("unknown request curl option: {arg}");
+        }
+    }
+
+    let store = open_store(db_path)?;
+    let (request, _) = find_request_with_response(&store, &request_id)?;
+    let request_body = load_body_text(&store, request.request_body_ref.as_deref())?;
+    let args = build_curl_args(&request, request_body.as_deref());
+    let command = build_curl_command(&args);
+    let result = CliCurlCommand {
+        request_id: request.id,
+        command,
+        args,
+    };
+    if json_output {
+        print_json(&result)?;
+    } else {
+        println!("{}", result.command);
     }
     Ok(())
 }
@@ -394,13 +437,7 @@ fn handle_replay(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
     let (request, _) = find_request_with_response(&store, &request_id)?;
     let request_body = load_body_text(&store, request.request_body_ref.as_deref())?;
     let args = build_curl_args(&request, request_body.as_deref());
-    let command = format!(
-        "curl {}",
-        args.iter()
-            .map(|arg| shell_quote(arg))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
+    let command = build_curl_command(&args);
     let mut replay = ReplayRecord::new(
         request.session_id.clone(),
         request.tab_id.clone(),
@@ -915,6 +952,16 @@ fn build_curl_args(request: &RequestRecord, request_body: Option<&str>) -> Vec<S
     parts
 }
 
+fn build_curl_command(args: &[String]) -> String {
+    format!(
+        "curl {}",
+        args.iter()
+            .map(|arg| shell_quote(arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
 fn push_header_arg(parts: &mut Vec<String>, header: &Header) {
     parts.push("-H".to_string());
     parts.push(format!("{}: {}", header.name, header.value));
@@ -991,6 +1038,7 @@ fn print_help() {
     println!("  devbench show [db-path]");
     println!("  devbench requests [--filter <expr>] [--json]");
     println!("  devbench request get <id> [--body] [--json]");
+    println!("  devbench request curl <id> [--json]");
     println!("  devbench console errors [--json]");
     println!("  devbench storage get <localStorage|sessionStorage> <key> [--json]");
     println!("  devbench cookies list [--json]");
