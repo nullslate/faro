@@ -779,6 +779,15 @@ impl WorkbenchState {
         }
     }
 
+    pub(crate) fn clear_request_filter_and_route(&mut self) {
+        self.request_filter.clear();
+        self.sql_request_filter_ids = None;
+        self.sql_request_filter_query = None;
+        self.active_request_route_group = None;
+        self.apply_filter();
+        self.status = "cleared request filter and route".to_string();
+    }
+
     pub(crate) fn apply_filter_from_palette(&mut self) {
         self.apply_filter();
         self.set_view(WorkbenchView::Network);
@@ -3319,6 +3328,30 @@ mod tests {
         state.cycle_filter_preset();
         assert_eq!(state.request_filter, "has:error");
         assert_eq!(state.active_filter_preset_label(), Some("errors"));
+        Ok(())
+    }
+
+    #[test]
+    fn clear_request_filter_and_route_resets_breadcrumb() -> TestResult {
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+
+        state.request_filter = "status:5xx".to_string();
+        state.sql_request_filter_ids = Some(std::collections::HashSet::new());
+        state.sql_request_filter_query = Some("select id from requests".to_string());
+        state.active_request_route_group = Some("localhost:5173/api/users".to_string());
+
+        state.clear_request_filter_and_route();
+
+        assert!(state.request_filter.is_empty());
+        assert!(state.sql_request_filter_ids.is_none());
+        assert!(state.sql_request_filter_query.is_none());
+        assert!(state.active_request_route_group.is_none());
         Ok(())
     }
 

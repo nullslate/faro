@@ -1265,11 +1265,23 @@ fn active_filter_count(app: &WorkbenchState) -> usize {
 }
 
 fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
-    let area = centered_rect(frame.area(), 74, 22);
+    let area = centered_rect(frame.area(), 82, 24);
     let lines = vec![
         Line::from(vec![
-            Span::styled("navigation", label_style()),
-            Span::raw("  "),
+            Span::styled("Faro Keys", panel_title_style(true)),
+            Span::styled("  press ", muted_style()),
+            Span::styled("?", key_style()),
+            Span::styled(" or ", muted_style()),
+            Span::styled("esc", key_style()),
+            Span::styled(" to close", muted_style()),
+        ]),
+        Line::styled(
+            "─".repeat(area.width.saturating_sub(4) as usize),
+            muted_style(),
+        ),
+        Line::from(vec![
+            Span::styled("NAV", modal_section_style()),
+            Span::raw("      "),
             Span::styled("p", key_style()),
             Span::raw(" palette  "),
             Span::styled("tab", key_style()),
@@ -1284,8 +1296,8 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw(" top/bottom"),
         ]),
         Line::from(vec![
-            Span::styled("network", label_style()),
-            Span::raw("     "),
+            Span::styled("NETWORK", modal_section_style()),
+            Span::raw("  "),
             Span::styled("h/l", key_style()),
             Span::raw(" detail tabs  "),
             Span::styled("s/S", key_style()),
@@ -1302,8 +1314,8 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw(" clear filter"),
         ]),
         Line::from(vec![
-            Span::styled("capture", label_style()),
-            Span::raw("     "),
+            Span::styled("CAPTURE", modal_section_style()),
+            Span::raw("  "),
             Span::styled("o", key_style()),
             Span::raw(" open browser  "),
             Span::styled("F5", key_style()),
@@ -1316,8 +1328,8 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw(" save exchange"),
         ]),
         Line::from(vec![
-            Span::styled("panes", label_style()),
-            Span::raw("       "),
+            Span::styled("PANES", modal_section_style()),
+            Span::raw("    "),
             Span::styled("R", key_style()),
             Span::raw(" requests  "),
             Span::styled("D", key_style()),
@@ -1326,16 +1338,16 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw(" body"),
         ]),
         Line::from(vec![
-            Span::styled("replay", label_style()),
-            Span::raw("      "),
+            Span::styled("REPLAY", modal_section_style()),
+            Span::raw("   "),
             Span::styled("r", key_style()),
             Span::raw(" replay  "),
             Span::styled("p", key_style()),
             Span::raw(" palette for edit replay and diff replay"),
         ]),
         Line::from(vec![
-            Span::styled("layout", label_style()),
-            Span::raw("      "),
+            Span::styled("LAYOUT", modal_section_style()),
+            Span::raw("   "),
             Span::styled("m", key_style()),
             Span::raw(" maximize/focus  "),
             Span::styled("z", key_style()),
@@ -1347,19 +1359,25 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
         ]),
         Line::raw(""),
         Line::from(vec![
-            Span::styled("filters", label_style()),
-            Span::raw("     plain terms, structured tokens, or regex patterns"),
+            Span::styled("FILTERS", modal_section_style()),
+            Span::raw("  plain terms, structured tokens, or regex patterns"),
         ]),
-        Line::raw("            status:5xx method:post domain:localhost has:body"),
-        Line::raw("            path:/api/v[0-9]+  method:^(post|put)$  /graphql|rest/"),
-        Line::raw("            duration:>500 size:>100kb reqbody:email resbody:error"),
-        Line::raw(
-            "            image previews render in Kitty/iTerm when image bodies are captured",
+        Line::styled(
+            "         status:5xx method:post domain:localhost has:body",
+            muted_style(),
+        ),
+        Line::styled(
+            "         path:/api/v[0-9]+  method:^(post|put)$  /graphql|rest/",
+            muted_style(),
+        ),
+        Line::styled(
+            "         duration:>500 size:>100kb reqbody:email resbody:error",
+            muted_style(),
         ),
         Line::raw(""),
         Line::from(vec![
-            Span::styled("console", label_style()),
-            Span::raw("     "),
+            Span::styled("CONSOLE", modal_section_style()),
+            Span::raw("  "),
             Span::styled("2", key_style()),
             Span::raw(" console view  "),
             Span::styled("e", key_style()),
@@ -1369,17 +1387,9 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
         ]),
         Line::raw(""),
         Line::from(vec![
-            Span::styled("close", label_style()),
-            Span::raw("       "),
-            Span::styled("esc", key_style()),
-            Span::raw(" or "),
-            Span::styled("?", key_style()),
-        ]),
-        Line::raw(""),
-        Line::from(vec![
-            Span::styled("current", label_style()),
+            Span::styled("STATE", modal_section_style()),
             Span::raw(format!(
-                "     view={} focus={} density={} filter={} split={}:{} / {}:{}",
+                "    view={}  focus={}  density={}  filter={}  split={}:{} / {}:{}",
                 app.view.label(),
                 app.focus.label(),
                 app.density_mode.label(),
@@ -1394,7 +1404,12 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block("Keys", true))
+            .block(themed_panel_block(
+                " Command Matrix ",
+                Some('?'),
+                true,
+                &app.config.theme,
+            ))
             .style(Style::default().fg(GB_FG))
             .wrap(Wrap { trim: false }),
         area,
@@ -1402,45 +1417,60 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
 }
 
 fn render_palette_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
-    let area = centered_rect(frame.area(), 72, 18);
+    let area = centered_rect(frame.area(), 76, 20);
     let entries = app.filtered_palette_entries();
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("query ", label_style()),
+            Span::styled("▸ ", key_style()),
+            Span::styled("command", modal_section_style()),
+            Span::styled("  ", muted_style()),
             Span::raw(if app.palette_query.is_empty() {
-                "type to fuzzy search commands and presets".to_string()
+                "type to fuzzy search commands, presets, and views".to_string()
             } else {
                 app.palette_query.clone()
             }),
+            Span::styled(
+                format!(
+                    "  {} match{}",
+                    entries.len(),
+                    if entries.len() == 1 { "" } else { "es" }
+                ),
+                muted_style(),
+            ),
         ]),
-        Line::raw(""),
+        Line::styled(
+            "─".repeat(area.width.saturating_sub(4) as usize),
+            muted_style(),
+        ),
     ];
     if entries.is_empty() {
+        lines.push(Line::raw(""));
         lines.push(Line::styled("No commands match.", warning_style()));
     } else {
-        let visible_start = app.palette_selected.saturating_sub(11);
-        for (index, entry) in entries.iter().enumerate().skip(visible_start).take(12) {
+        let visible_start = app.palette_selected.saturating_sub(10);
+        for (index, entry) in entries.iter().enumerate().skip(visible_start).take(11) {
             let selected = index == app.palette_selected;
-            let style = if selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(GB_GREEN)
-                    .add_modifier(Modifier::BOLD)
+            let title_style = if selected {
+                Style::default().fg(GB_GREEN).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(GB_FG)
             };
             lines.push(Line::from(vec![
-                Span::styled(if selected { "> " } else { "  " }, key_style()),
-                Span::styled(entry.title.to_string(), style),
+                Span::styled(
+                    if selected { "┃ " } else { "  " },
+                    modal_selection_style(selected),
+                ),
+                Span::styled(compact_value(entry.title, 34), title_style),
+                Span::raw(" "),
                 Span::styled(format!("  {}", entry.hint), muted_style()),
             ]));
         }
-        if entries.len() > 12 {
+        if entries.len() > 11 {
             lines.push(Line::styled(
                 format!(
                     "  showing {}-{} of {}",
                     visible_start + 1,
-                    (visible_start + 12).min(entries.len()),
+                    (visible_start + 11).min(entries.len()),
                     entries.len()
                 ),
                 muted_style(),
@@ -1460,7 +1490,12 @@ fn render_palette_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
     frame.render_widget(Clear, area);
     frame.render_widget(
         Paragraph::new(lines)
-            .block(panel_block("Command Palette", true))
+            .block(themed_panel_block(
+                " Command Palette ",
+                Some('P'),
+                true,
+                &app.config.theme,
+            ))
             .style(Style::default().fg(GB_FG))
             .wrap(Wrap { trim: false }),
         area,
@@ -1717,6 +1752,18 @@ fn label_style() -> Style {
 
 fn key_style() -> Style {
     Style::default().fg(GB_GREEN).add_modifier(Modifier::BOLD)
+}
+
+fn modal_section_style() -> Style {
+    Style::default().fg(GB_YELLOW).add_modifier(Modifier::BOLD)
+}
+
+fn modal_selection_style(selected: bool) -> Style {
+    if selected {
+        Style::default().fg(GB_GREEN).add_modifier(Modifier::BOLD)
+    } else {
+        muted_style()
+    }
 }
 
 fn muted_style() -> Style {
@@ -2287,14 +2334,14 @@ fn request_tree_marker(
         .map(|meta| {
             if meta.has_children {
                 (
-                    if meta.collapsed { "▸" } else { "▾" },
+                    if meta.collapsed { "[▸]" } else { "[▾]" },
                     fade.accent_style(theme.panel_title),
                 )
             } else {
-                ("•", fade.secondary_style(theme))
+                (" · ", fade.secondary_style(theme))
             }
         })
-        .unwrap_or(("•", fade.secondary_style(theme)));
+        .unwrap_or((" · ", fade.secondary_style(theme)));
     Line::from(vec![
         Span::styled(branch.to_string(), branch_style),
         Span::styled("─".to_string(), fade.secondary_style(theme)),
@@ -2658,14 +2705,281 @@ fn compact_value(value: &str, max_chars: usize) -> String {
     compact
 }
 
+#[derive(Clone, Copy)]
+enum BodySyntax {
+    Json,
+    Html,
+    Css,
+    JavaScript,
+    Xml,
+    Text,
+}
+
 fn syntax_body_lines(body: String) -> Vec<Line<'static>> {
-    if serde_json::from_str::<serde_json::Value>(&body).is_ok() {
-        body.lines().map(highlight_json_line).collect()
-    } else {
-        body.lines()
+    syntax_body_lines_with(body, BodySyntax::Json)
+}
+
+fn syntax_body_lines_for_request(request: &RequestView, body: String) -> Vec<Line<'static>> {
+    syntax_body_lines_with(body, body_syntax_for_request(request))
+}
+
+fn syntax_body_lines_with(body: String, syntax: BodySyntax) -> Vec<Line<'static>> {
+    match syntax {
+        BodySyntax::Json if serde_json::from_str::<serde_json::Value>(&body).is_ok() => {
+            body.lines().map(highlight_json_line).collect()
+        }
+        BodySyntax::Html => body.lines().map(highlight_html_line).collect(),
+        BodySyntax::Css => body.lines().map(highlight_css_line).collect(),
+        BodySyntax::JavaScript => body.lines().map(highlight_javascript_line).collect(),
+        BodySyntax::Xml => body.lines().map(highlight_html_line).collect(),
+        BodySyntax::Json | BodySyntax::Text => body
+            .lines()
             .map(|line| Line::styled(line.to_string(), Style::default().fg(GB_FG)))
-            .collect()
+            .collect(),
     }
+}
+
+fn body_syntax_for_request(request: &RequestView) -> BodySyntax {
+    let mime = request
+        .response
+        .as_ref()
+        .and_then(|response| response.mime_type.as_deref())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let resource = request
+        .request
+        .resource_type
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let path = path_for_url(&request.request.url).to_ascii_lowercase();
+
+    if mime.contains("json") || path.ends_with(".json") {
+        BodySyntax::Json
+    } else if mime.contains("html") || resource == "document" || path.ends_with(".html") {
+        BodySyntax::Html
+    } else if mime.contains("css") || resource == "stylesheet" || path.ends_with(".css") {
+        BodySyntax::Css
+    } else if mime.contains("javascript")
+        || mime.contains("ecmascript")
+        || resource == "script"
+        || path.ends_with(".js")
+        || path.ends_with(".mjs")
+    {
+        BodySyntax::JavaScript
+    } else if mime.contains("xml") || path.ends_with(".xml") || path.ends_with(".svg") {
+        BodySyntax::Xml
+    } else {
+        BodySyntax::Text
+    }
+}
+
+fn highlight_html_line(line: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+
+    while index < line.len() {
+        let rest = &line[index..];
+        if rest.starts_with("<!--") {
+            let end = rest
+                .find("-->")
+                .map(|offset| index + offset + 3)
+                .unwrap_or(line.len());
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                js_comment_style(),
+            ));
+            index = end;
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if ch == '<' {
+            spans.push(Span::styled("<".to_string(), json_punctuation_style()));
+            index += ch.len_utf8();
+            if line[index..].starts_with('/') {
+                spans.push(Span::styled("/".to_string(), json_punctuation_style()));
+                index += 1;
+            }
+            let name_start = index;
+            while index < line.len() {
+                let Some(next) = line[index..].chars().next() else {
+                    break;
+                };
+                if !(next.is_ascii_alphanumeric() || matches!(next, '-' | ':' | '_' | '!')) {
+                    break;
+                }
+                index += next.len_utf8();
+            }
+            if index > name_start {
+                spans.push(Span::styled(
+                    line[name_start..index].to_string(),
+                    Style::default().fg(GB_BLUE).add_modifier(Modifier::BOLD),
+                ));
+            }
+            continue;
+        }
+        if ch == '>' || ch == '/' || ch == '=' {
+            spans.push(Span::styled(ch.to_string(), json_punctuation_style()));
+            index += ch.len_utf8();
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            let end = quoted_string_end(line, index, ch);
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                json_string_style(),
+            ));
+            index = end;
+            continue;
+        }
+        if is_js_ident_start(ch) {
+            let end = consume_html_identifier(line, index);
+            let token = &line[index..end];
+            let style = if line[end..].trim_start().starts_with('=') {
+                Style::default().fg(GB_AQUA)
+            } else {
+                Style::default().fg(GB_FG)
+            };
+            spans.push(Span::styled(token.to_string(), style));
+            index = end;
+            continue;
+        }
+        spans.push(Span::raw(ch.to_string()));
+        index += ch.len_utf8();
+    }
+
+    Line::from(spans)
+}
+
+fn consume_html_identifier(line: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in line[start..].char_indices() {
+        if !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | ':' | '_' | '.')) {
+            break;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    end
+}
+
+fn highlight_css_line(line: &str) -> Line<'static> {
+    let mut spans = Vec::new();
+    let mut index = 0;
+
+    while index < line.len() {
+        let rest = &line[index..];
+        if rest.starts_with("/*") {
+            let end = rest
+                .find("*/")
+                .map(|offset| index + offset + 2)
+                .unwrap_or(line.len());
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                js_comment_style(),
+            ));
+            index = end;
+            continue;
+        }
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if ch == '"' || ch == '\'' {
+            let end = quoted_string_end(line, index, ch);
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                json_string_style(),
+            ));
+            index = end;
+            continue;
+        }
+        if ch == '#'
+            && rest
+                .chars()
+                .nth(1)
+                .is_some_and(|next| next.is_ascii_hexdigit())
+        {
+            let end = consume_css_hash(line, index);
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                Style::default().fg(GB_PURPLE),
+            ));
+            index = end;
+            continue;
+        }
+        if ch == '@' {
+            let end = consume_css_identifier(line, index + ch.len_utf8());
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                Style::default().fg(GB_BLUE).add_modifier(Modifier::BOLD),
+            ));
+            index = end;
+            continue;
+        }
+        if ch.is_ascii_digit() {
+            let end = consume_css_number(line, index);
+            spans.push(Span::styled(
+                line[index..end].to_string(),
+                json_number_style(),
+            ));
+            index = end;
+            continue;
+        }
+        if is_js_ident_start(ch) || ch == '-' {
+            let end = consume_css_identifier(line, index);
+            let token = &line[index..end];
+            let style = if line[end..].trim_start().starts_with(':') {
+                Style::default().fg(GB_AQUA)
+            } else {
+                Style::default().fg(GB_FG)
+            };
+            spans.push(Span::styled(token.to_string(), style));
+            index = end;
+            continue;
+        }
+        if matches!(ch, '{' | '}' | ':' | ';' | ',' | '(' | ')' | '[' | ']') {
+            spans.push(Span::styled(ch.to_string(), json_punctuation_style()));
+        } else {
+            spans.push(Span::raw(ch.to_string()));
+        }
+        index += ch.len_utf8();
+    }
+
+    Line::from(spans)
+}
+
+fn consume_css_identifier(line: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in line[start..].char_indices() {
+        if !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')) {
+            break;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    end
+}
+
+fn consume_css_hash(line: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in line[start..].char_indices() {
+        if !(ch == '#' || ch.is_ascii_hexdigit()) {
+            break;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    end
+}
+
+fn consume_css_number(line: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in line[start..].char_indices() {
+        if !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '%' | '-' | '+')) {
+            break;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    end
 }
 
 fn highlight_javascript_line(line: &str) -> Line<'static> {
@@ -2987,7 +3301,7 @@ fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         if !app.body_tree_items().is_empty() {
             return body_tree_lines(app);
         }
-        return syntax_body_lines(formatted_response_body(request));
+        return syntax_body_lines_for_request(request, formatted_response_body(request));
     }
 
     let mut lines = vec![
@@ -3095,8 +3409,8 @@ mod tests {
     use crate::config::AppConfig;
     use crate::tui::state::{InputMode, SortMode};
     use faro_core::{
-        CookieEventRecord, CookieRecord, CookieSnapshotRecord, StorageEntry, StorageEventRecord,
-        StorageSnapshotRecord,
+        CookieEventRecord, CookieRecord, CookieSnapshotRecord, RequestRecord, ResponseRecord,
+        StorageEntry, StorageEventRecord, StorageSnapshotRecord,
     };
     use ratatui::widgets::{ListState, TableState};
     use std::path::PathBuf;
@@ -3161,6 +3475,28 @@ mod tests {
             cdp_websocket_url: None,
             status: String::new(),
             status_updated_at: std::time::Instant::now(),
+        }
+    }
+
+    fn response_request(mime: &str, resource_type: &str, url: &str) -> RequestView {
+        let mut request = RequestRecord::started(
+            "session".to_string(),
+            Some("tab".to_string()),
+            Some("run".to_string()),
+            "GET",
+            url,
+        );
+        request.resource_type = Some(resource_type.to_string());
+        let mut response = ResponseRecord::received(request.id.clone());
+        response.status_code = Some(200);
+        response.mime_type = Some(mime.to_string());
+        RequestView {
+            request,
+            response: Some(response),
+            request_body: None,
+            response_body: None,
+            replays: Vec::new(),
+            details_loaded: true,
         }
     }
 
@@ -3355,6 +3691,63 @@ mod tests {
     }
 
     #[test]
+    fn syntax_body_lines_highlights_html_response() {
+        let request = response_request("text/html", "document", "https://example.test/");
+        let lines = syntax_body_lines_for_request(
+            &request,
+            r#"<main class="shell">Hello</main>"#.to_string(),
+        );
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+
+        assert!(spans.iter().any(|span| span.content.as_ref() == "main"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "class"));
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.content.as_ref() == r#""shell""#)
+        );
+    }
+
+    #[test]
+    fn syntax_body_lines_highlights_css_response() {
+        let request = response_request("text/css", "stylesheet", "https://example.test/app.css");
+        let lines = syntax_body_lines_for_request(
+            &request,
+            ".shell { color: #d4be98; margin: 12px; }".to_string(),
+        );
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+
+        assert!(spans.iter().any(|span| span.content.as_ref() == "color"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "#d4be98"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "12px"));
+    }
+
+    #[test]
+    fn syntax_body_lines_highlights_javascript_response() {
+        let request = response_request(
+            "application/javascript",
+            "script",
+            "https://example.test/app.js",
+        );
+        let lines =
+            syntax_body_lines_for_request(&request, "const title = document.title;".to_string());
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+
+        assert!(spans.iter().any(|span| span.content.as_ref() == "const"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "document"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "title"));
+    }
+
+    #[test]
     fn parse_sse_events_groups_fields() {
         let events = parse_sse_events(
             "id: 1\nevent: patch\ndata: {\"ok\":true}\n\nretry: 5000\ndata: heartbeat\n\n",
@@ -3444,7 +3837,7 @@ fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         DetailTab::ResponseBody if is_image_request(request) => image_preview_lines(request),
         DetailTab::ResponseBody if is_sse_request(request) => sse_body_lines(request),
         DetailTab::ResponseBody if !app.body_tree_items().is_empty() => body_tree_lines(app),
-        DetailTab::ResponseBody => body_lines("response body", formatted_response_body(request)),
+        DetailTab::ResponseBody => response_body_lines(request),
         DetailTab::Timing => timing_lines(request),
         DetailTab::Replay => replay_lines(request),
     }
@@ -3808,6 +4201,15 @@ fn parse_sse_events(body: &str) -> Vec<SseEvent> {
 fn body_lines(title: &'static str, body: String) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled(title, label_style()), Line::raw("")];
     lines.extend(syntax_body_lines(body));
+    lines
+}
+
+fn response_body_lines(request: &RequestView) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::styled("response body", label_style()), Line::raw("")];
+    lines.extend(syntax_body_lines_for_request(
+        request,
+        formatted_response_body(request),
+    ));
     lines
 }
 
