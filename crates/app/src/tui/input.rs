@@ -281,6 +281,16 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
             app.apply_filter_from_palette();
             InputOutcome::Continue
         }
+        PaletteCommand::ConsoleFilter(query) => {
+            app.console_filter = query.to_string();
+            app.apply_console_filter_from_palette();
+            InputOutcome::Continue
+        }
+        PaletteCommand::WebSocketFilter(query) => {
+            app.websocket_filter = query.to_string();
+            app.apply_websocket_filter_from_palette();
+            InputOutcome::Continue
+        }
         PaletteCommand::ClearFilter => {
             app.clear_filter();
             InputOutcome::Continue

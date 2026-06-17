@@ -75,6 +75,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) last_sql_query: String,
     pub(crate) request_filter: String,
     pub(crate) console_filter: String,
+    pub(crate) websocket_filter: String,
     pub(crate) cdp_websocket_url: Option<String>,
     pub(crate) status: String,
     pub(crate) status_updated_at: Instant,
@@ -219,6 +220,7 @@ impl WorkbenchState {
             last_sql_query: String::new(),
             request_filter: initial_request_filter,
             console_filter: String::new(),
+            websocket_filter: String::new(),
             cdp_websocket_url: None,
             status: "starting CDP capture".to_string(),
             status_updated_at: Instant::now(),
@@ -774,7 +776,7 @@ impl WorkbenchState {
                 self.apply_console_filter();
             }
             WorkbenchView::WebSockets => {
-                self.request_filter.push(character);
+                self.websocket_filter.push(character);
                 self.apply_websocket_filter();
             }
             WorkbenchView::Scripts => {}
@@ -792,7 +794,7 @@ impl WorkbenchState {
                 self.apply_console_filter();
             }
             WorkbenchView::WebSockets => {
-                self.request_filter.pop();
+                self.websocket_filter.pop();
                 self.apply_websocket_filter();
             }
             WorkbenchView::Scripts => {}
@@ -810,7 +812,7 @@ impl WorkbenchState {
                 self.apply_console_filter();
             }
             WorkbenchView::WebSockets => {
-                self.request_filter.clear();
+                self.websocket_filter.clear();
                 self.apply_websocket_filter();
             }
             WorkbenchView::Scripts => {}
@@ -842,18 +844,54 @@ impl WorkbenchState {
         };
     }
 
-    pub(crate) fn cycle_filter_preset(&mut self) {
-        let current = FILTER_PRESETS
-            .iter()
-            .position(|preset| preset.query == self.request_filter);
-        let next = current.map(|index| index + 1).unwrap_or(1) % FILTER_PRESETS.len();
-        self.request_filter = FILTER_PRESETS[next].query.to_string();
-        self.apply_filter();
-        self.status = if self.request_filter.is_empty() {
-            "filter preset all".to_string()
+    pub(crate) fn apply_console_filter_from_palette(&mut self) {
+        self.apply_console_filter();
+        self.set_view(WorkbenchView::Console);
+        self.status = if self.console_filter.is_empty() {
+            "console filter all".to_string()
         } else {
-            format!("filter preset {}", FILTER_PRESETS[next].label)
+            format!("console filter {}", self.console_filter)
         };
+    }
+
+    pub(crate) fn apply_websocket_filter_from_palette(&mut self) {
+        self.apply_websocket_filter();
+        self.set_view(WorkbenchView::WebSockets);
+        self.status = if self.websocket_filter.is_empty() {
+            "websocket filter all".to_string()
+        } else {
+            format!("websocket filter {}", self.websocket_filter)
+        };
+    }
+
+    pub(crate) fn cycle_filter_preset(&mut self) {
+        match self.view {
+            WorkbenchView::Console => self.cycle_console_filter_preset(),
+            WorkbenchView::WebSockets => self.cycle_websocket_filter_preset(),
+            WorkbenchView::Network => self.cycle_request_filter_preset(),
+            _ => {}
+        }
+    }
+
+    fn cycle_request_filter_preset(&mut self) {
+        let preset = next_filter_preset(FILTER_PRESETS, &self.request_filter);
+        self.request_filter = preset.query.to_string();
+        self.apply_filter();
+        self.status = filter_preset_status("request", preset);
+    }
+
+    fn cycle_console_filter_preset(&mut self) {
+        let preset = next_filter_preset(CONSOLE_FILTER_PRESETS, &self.console_filter);
+        self.console_filter = preset.query.to_string();
+        self.apply_console_filter();
+        self.status = filter_preset_status("console", preset);
+    }
+
+    fn cycle_websocket_filter_preset(&mut self) {
+        let preset = next_filter_preset(WEBSOCKET_FILTER_PRESETS, &self.websocket_filter);
+        self.websocket_filter = preset.query.to_string();
+        self.apply_websocket_filter();
+        self.status = filter_preset_status("websocket", preset);
     }
 
     pub(crate) fn active_filter_preset_label(&self) -> Option<&'static str> {
@@ -1353,7 +1391,7 @@ impl WorkbenchState {
         let selected_id = self
             .selected_websocket_frame()
             .map(|frame| frame.id.clone());
-        let filter = self.request_filter.trim().to_lowercase();
+        let filter = self.websocket_filter.trim().to_lowercase();
         self.filtered_websocket_indices = self
             .websocket_frames
             .iter()
@@ -2014,6 +2052,8 @@ impl InputMode {
 pub(crate) enum PaletteCommand {
     View(WorkbenchView),
     Filter(&'static str),
+    ConsoleFilter(&'static str),
+    WebSocketFilter(&'static str),
     ClearFilter,
     SortNext,
     SortDirection,
@@ -2146,6 +2186,51 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "Filter: Replayed",
         hint: "preset replay history",
         command: PaletteCommand::Filter("has:replay"),
+    },
+    PaletteEntry {
+        title: "Console Filter: All",
+        hint: "console levels clear",
+        command: PaletteCommand::ConsoleFilter(""),
+    },
+    PaletteEntry {
+        title: "Console Filter: Errors",
+        hint: "console error fatal",
+        command: PaletteCommand::ConsoleFilter("level:error"),
+    },
+    PaletteEntry {
+        title: "Console Filter: Warnings",
+        hint: "console warn warnings",
+        command: PaletteCommand::ConsoleFilter("level:warn"),
+    },
+    PaletteEntry {
+        title: "Console Filter: Info",
+        hint: "console info logs",
+        command: PaletteCommand::ConsoleFilter("level:info"),
+    },
+    PaletteEntry {
+        title: "Console Filter: Eval",
+        hint: "console faro eval",
+        command: PaletteCommand::ConsoleFilter("kind:eval"),
+    },
+    PaletteEntry {
+        title: "WebSocket Filter: All",
+        hint: "websocket frames clear",
+        command: PaletteCommand::WebSocketFilter(""),
+    },
+    PaletteEntry {
+        title: "WebSocket Filter: Sent",
+        hint: "websocket sent outbound",
+        command: PaletteCommand::WebSocketFilter("sent"),
+    },
+    PaletteEntry {
+        title: "WebSocket Filter: Received",
+        hint: "websocket received inbound",
+        command: PaletteCommand::WebSocketFilter("received"),
+    },
+    PaletteEntry {
+        title: "WebSocket Filter: Text",
+        hint: "websocket text opcode",
+        command: PaletteCommand::WebSocketFilter("text"),
     },
     PaletteEntry {
         title: "Clear Filter",
@@ -2625,6 +2710,76 @@ const FILTER_PRESETS: &[FilterPreset] = &[
         query: "has:replay",
     },
 ];
+
+const CONSOLE_FILTER_PRESETS: &[FilterPreset] = &[
+    FilterPreset {
+        label: "all",
+        query: "",
+    },
+    FilterPreset {
+        label: "errors",
+        query: "level:error",
+    },
+    FilterPreset {
+        label: "warnings",
+        query: "level:warn",
+    },
+    FilterPreset {
+        label: "info",
+        query: "level:info",
+    },
+    FilterPreset {
+        label: "debug",
+        query: "level:debug",
+    },
+    FilterPreset {
+        label: "eval",
+        query: "kind:eval",
+    },
+    FilterPreset {
+        label: "page",
+        query: "kind:page",
+    },
+];
+
+const WEBSOCKET_FILTER_PRESETS: &[FilterPreset] = &[
+    FilterPreset {
+        label: "all",
+        query: "",
+    },
+    FilterPreset {
+        label: "sent",
+        query: "sent",
+    },
+    FilterPreset {
+        label: "received",
+        query: "received",
+    },
+    FilterPreset {
+        label: "text",
+        query: "text",
+    },
+    FilterPreset {
+        label: "binary",
+        query: "binary",
+    },
+];
+
+fn next_filter_preset<'a>(presets: &'a [FilterPreset], current_query: &str) -> &'a FilterPreset {
+    let current = presets
+        .iter()
+        .position(|preset| preset.query == current_query);
+    let next = current.map(|index| index + 1).unwrap_or(1) % presets.len();
+    &presets[next]
+}
+
+fn filter_preset_status(scope: &str, preset: &FilterPreset) -> String {
+    if preset.query.is_empty() {
+        format!("{scope} filter preset all")
+    } else {
+        format!("{scope} filter preset {}", preset.label)
+    }
+}
 
 fn filter_query_for_preset_label(label: &str) -> Option<&'static str> {
     FILTER_PRESETS
@@ -3566,6 +3721,29 @@ mod tests {
         state.cycle_filter_preset();
         assert_eq!(state.request_filter, "has:error");
         assert_eq!(state.active_filter_preset_label(), Some("errors"));
+        Ok(())
+    }
+
+    #[test]
+    fn cycles_filter_presets_for_active_view() -> TestResult {
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.request_filter.clear();
+
+        state.set_view(WorkbenchView::Console);
+        state.cycle_filter_preset();
+        assert_eq!(state.console_filter, "level:error");
+        assert!(state.request_filter.is_empty());
+
+        state.set_view(WorkbenchView::WebSockets);
+        state.cycle_filter_preset();
+        assert_eq!(state.websocket_filter, "sent");
+        assert!(state.request_filter.is_empty());
         Ok(())
     }
 

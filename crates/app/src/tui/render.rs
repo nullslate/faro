@@ -973,7 +973,7 @@ fn render_websocket_stream(frame: &mut ratatui::Frame, area: Rect, app: &mut Wor
         .filter_map(|index| app.websocket_frames.get(*index))
         .map(websocket_stream_item)
         .collect::<Vec<_>>();
-    let title = if app.request_filter.is_empty() {
+    let title = if app.websocket_filter.is_empty() {
         format!(
             "WebSocket Stream {}/{}",
             app.filtered_websocket_indices.len(),
@@ -982,7 +982,7 @@ fn render_websocket_stream(frame: &mut ratatui::Frame, area: Rect, app: &mut Wor
     } else {
         format!(
             "WebSocket Stream /{} ({}/{})",
-            app.request_filter,
+            app.websocket_filter,
             app.filtered_websocket_indices.len(),
             app.websocket_frames.len()
         )
@@ -1414,6 +1414,7 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
 fn active_filter_count(app: &WorkbenchState) -> usize {
     usize::from(!app.request_filter.is_empty())
         + usize::from(!app.console_filter.is_empty())
+        + usize::from(!app.websocket_filter.is_empty())
         + usize::from(app.sql_request_filter_ids.is_some())
         + usize::from(app.active_request_route_breadcrumb().is_some())
 }
@@ -1868,6 +1869,10 @@ fn active_filter_text(app: &WorkbenchState) -> String {
     match app.view {
         WorkbenchView::Console if !app.console_filter.is_empty() => app.console_filter.clone(),
         WorkbenchView::Console => "all".to_string(),
+        WorkbenchView::WebSockets if !app.websocket_filter.is_empty() => {
+            app.websocket_filter.clone()
+        }
+        WorkbenchView::WebSockets => "all".to_string(),
         _ if !app.request_filter.is_empty() => app.request_filter.clone(),
         _ => "all".to_string(),
     }
@@ -3652,6 +3657,7 @@ mod tests {
             last_sql_query: String::new(),
             request_filter: String::new(),
             console_filter: String::new(),
+            websocket_filter: String::new(),
             cdp_websocket_url: None,
             status: String::new(),
             status_updated_at: std::time::Instant::now(),
