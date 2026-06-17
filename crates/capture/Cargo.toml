@@ -1,0 +1,13 @@
+[package]
+name = "devbench-capture"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+devbench-core = { path = "../core" }
+devbench-store = { path = "../store" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
