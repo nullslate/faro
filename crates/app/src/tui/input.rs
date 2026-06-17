@@ -150,7 +150,7 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
         }
         KeyCode::Char('c') if app.view == WorkbenchView::Console => InputOutcome::ClearConsole,
         KeyCode::Char('c') if app.view == WorkbenchView::Network => {
-            app.clear_request_filter_and_route();
+            app.clear_visible_requests();
             InputOutcome::Continue
         }
         KeyCode::Char('c') => {

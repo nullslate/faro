@@ -37,6 +37,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) active_request_route_group: Option<String>,
     pub(crate) sql_request_filter_ids: Option<HashSet<String>>,
     pub(crate) sql_request_filter_query: Option<String>,
+    pub(crate) requests_hidden_before: Option<UnixMillis>,
     pub(crate) console_logs: Vec<ConsoleLog>,
     pub(crate) filtered_console_indices: Vec<usize>,
     pub(crate) console_hidden_before: Option<UnixMillis>,
@@ -184,6 +185,7 @@ impl WorkbenchState {
             active_request_route_group: None,
             sql_request_filter_ids: None,
             sql_request_filter_query: None,
+            requests_hidden_before: None,
             console_logs,
             filtered_console_indices,
             console_hidden_before: None,
@@ -321,6 +323,21 @@ impl WorkbenchState {
         self.filtered_console_indices.clear();
         self.console_state.select(None);
         self.status = "console cleared".to_string();
+    }
+
+    pub(crate) fn clear_visible_requests(&mut self) {
+        self.requests_hidden_before = Some(now_ms());
+        self.apply_filter();
+        self.status = match self.active_filter_preset_label() {
+            Some(label) => format!("cleared visible {label} requests; tracking fresh traffic"),
+            None if !self.request_filter.is_empty() => {
+                format!(
+                    "cleared visible `{}` requests; tracking fresh traffic",
+                    self.request_filter
+                )
+            }
+            None => "cleared visible requests; tracking fresh traffic".to_string(),
+        };
     }
 
     pub(crate) fn toggle_layout_mode(&mut self) {
@@ -841,15 +858,6 @@ impl WorkbenchState {
         }
     }
 
-    pub(crate) fn clear_request_filter_and_route(&mut self) {
-        self.request_filter.clear();
-        self.sql_request_filter_ids = None;
-        self.sql_request_filter_query = None;
-        self.active_request_route_group = None;
-        self.apply_filter();
-        self.status = "cleared request filter and route".to_string();
-    }
-
     pub(crate) fn apply_filter_from_palette(&mut self) {
         self.apply_filter();
         self.set_view(WorkbenchView::Network);
@@ -1233,11 +1241,15 @@ impl WorkbenchState {
                     .as_ref()
                     .is_none_or(|ids| ids.contains(&request.request.id));
                 let route_matches = self.request_in_active_route(index);
+                let not_hidden_by_clear = self
+                    .requests_hidden_before
+                    .is_none_or(|hidden_before| request.request.started_at > hidden_before);
                 (sql_matches
                     && route_matches
                     && filter.matches(request)
-                    && !self.request_hidden_by_collapsed_group(index))
-                .then_some(index)
+                    && !self.request_hidden_by_collapsed_group(index)
+                    && not_hidden_by_clear)
+                    .then_some(index)
             })
             .collect();
         let sort_mode = self.sort_mode;
@@ -3594,6 +3606,52 @@ mod tests {
     }
 
     #[test]
+    fn clear_visible_requests_keeps_active_filter_and_tracks_fresh_requests() -> TestResult {
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        let mut old_fetch = request_view();
+        old_fetch.request.started_at = now_ms().saturating_sub(1_000);
+        let old_fetch_id = old_fetch.request.id.clone();
+        let mut document = request_view();
+        document.request.resource_type = Some("document".to_string());
+        document.request.started_at = old_fetch.request.started_at;
+        state.requests = vec![old_fetch, document];
+        state.request_filter = "type:fetch".to_string();
+        state.apply_filter();
+
+        assert_eq!(state.filtered_request_indices.len(), 1);
+        state.clear_visible_requests();
+
+        assert_eq!(state.request_filter, "type:fetch");
+        assert!(state.filtered_request_indices.is_empty());
+        assert!(
+            state
+                .requests_hidden_before
+                .is_some_and(|hidden_before| hidden_before >= state.requests[0].request.started_at)
+        );
+
+        let mut new_fetch = request_view();
+        new_fetch.request.started_at = state
+            .requests_hidden_before
+            .unwrap_or_default()
+            .saturating_add(1);
+        let new_fetch_id = new_fetch.request.id.clone();
+        state.requests.push(new_fetch);
+        state.apply_filter();
+
+        assert_eq!(state.filtered_request_indices.len(), 1);
+        let visible = &state.requests[state.filtered_request_indices[0]].request.id;
+        assert_eq!(visible, &new_fetch_id);
+        assert_ne!(visible, &old_fetch_id);
+        Ok(())
+    }
+
+    #[test]
     fn cycles_filter_presets() -> TestResult {
         let store = Store::open_memory()?;
         let mut state = WorkbenchState::load(
@@ -3631,30 +3689,6 @@ mod tests {
         state.cycle_filter_preset();
         assert_eq!(state.websocket_filter, "sent");
         assert!(state.request_filter.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn clear_request_filter_and_route_resets_breadcrumb() -> TestResult {
-        let store = Store::open_memory()?;
-        let mut state = WorkbenchState::load(
-            &store,
-            std::path::Path::new("memory.db"),
-            "http://localhost:5173",
-            AppConfig::default(),
-        )?;
-
-        state.request_filter = "status:5xx".to_string();
-        state.sql_request_filter_ids = Some(std::collections::HashSet::new());
-        state.sql_request_filter_query = Some("select id from requests".to_string());
-        state.active_request_route_group = Some("localhost:5173/api/users".to_string());
-
-        state.clear_request_filter_and_route();
-
-        assert!(state.request_filter.is_empty());
-        assert!(state.sql_request_filter_ids.is_none());
-        assert!(state.sql_request_filter_query.is_none());
-        assert!(state.active_request_route_group.is_none());
         Ok(())
     }
 

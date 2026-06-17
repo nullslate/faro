@@ -542,7 +542,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                 Cell::from("-"),
                 Cell::from("capture"),
                 Cell::from("-"),
-                Cell::from("open or refresh your app to populate requests"),
+                Cell::from("open, refresh, or wait for fresh matching requests"),
                 Cell::from("-"),
                 Cell::from("-"),
             ])
@@ -3147,6 +3147,7 @@ mod tests {
             active_request_route_group: None,
             sql_request_filter_ids: None,
             sql_request_filter_query: None,
+            requests_hidden_before: None,
             console_logs: Vec::new(),
             filtered_console_indices: Vec::new(),
             console_hidden_before: None,

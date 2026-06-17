@@ -55,7 +55,7 @@ pub(super) fn render_help(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::styled("backspace", key_style()),
             Span::raw(" up  "),
             Span::styled("c", key_style()),
-            Span::raw(" clear filter"),
+            Span::raw(" clear visible"),
         ]),
         Line::from(vec![
             Span::styled("CAPTURE", modal_section_style()),
