@@ -2874,11 +2874,14 @@ fn html_tree_tag_is_self_closing(tag: &str) -> bool {
 }
 
 fn build_curl(request: &RequestView) -> String {
-    build_curl_args(request)
-        .into_iter()
-        .map(|arg| shell_quote(&arg))
-        .collect::<Vec<_>>()
-        .join(" ")
+    format!(
+        "curl {}",
+        build_curl_args(request)
+            .into_iter()
+            .map(|arg| shell_quote(&arg))
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
 }
 
 fn build_curl_args(request: &RequestView) -> Vec<String> {

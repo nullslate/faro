@@ -1,8 +1,8 @@
 use crate::{
-    CaptureOptions, CliOptions, CliReplayResult, build_curl_args, build_curl_command,
-    current_storage_items, find_request_with_response, latest_cookies, latest_session, load_body,
-    load_body_text, open_store, parse_duration, request_matches_filter, request_matches_route,
-    request_rows_for_session,
+    CaptureOptions, CliOptions, CliReplayResult, build_curl_args, build_curl_argv,
+    build_curl_command, current_storage_items, find_request_with_response, latest_cookies,
+    latest_session, load_body, load_body_text, open_store, parse_duration, request_matches_filter,
+    request_matches_route, request_rows_for_session,
 };
 use anyhow::{Context, bail};
 use devbench_cdp::CaptureUpdate;
@@ -264,7 +264,7 @@ fn copy_request_as_curl_tool(db_path: &Path, args: &Value) -> anyhow::Result<Val
     Ok(json!({
         "request_id": request.id,
         "command": build_curl_command(&args),
-        "args": args
+        "args": build_curl_argv(&args)
     }))
 }
 

@@ -410,7 +410,7 @@ fn handle_request_curl(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Resu
     let result = CliCurlCommand {
         request_id: request.id,
         command,
-        args,
+        args: build_curl_argv(&args),
     };
     if json_output {
         print_json(&result)?;
@@ -1198,6 +1198,13 @@ fn build_curl_command(args: &[String]) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     )
+}
+
+fn build_curl_argv(args: &[String]) -> Vec<String> {
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push("curl".to_string());
+    argv.extend(args.iter().cloned());
+    argv
 }
 
 fn push_header_arg(parts: &mut Vec<String>, header: &Header) {
