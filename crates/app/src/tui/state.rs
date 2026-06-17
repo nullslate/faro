@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
 
-use super::layout::{LayoutMode, LayoutPreference, clamp_split_percent};
+use super::layout::{DensityMode, LayoutMode, LayoutPreference, clamp_split_percent};
 
 pub(crate) type ReplayContext = (String, Option<String>, Option<String>, String, String);
 
@@ -49,6 +49,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) cookie_scroll: u16,
     pub(crate) input_mode: InputMode,
     pub(crate) layout_mode: LayoutMode,
+    pub(crate) density_mode: DensityMode,
     pub(crate) requests_percent: u16,
     pub(crate) detail_percent: u16,
     pub(crate) palette_query: String,
@@ -167,6 +168,7 @@ impl WorkbenchState {
             cookie_scroll: 0,
             input_mode: InputMode::Normal,
             layout_mode: layout_preference.mode,
+            density_mode: layout_preference.density,
             requests_percent: layout_preference.requests_percent,
             detail_percent: layout_preference.detail_percent,
             palette_query: String::new(),
@@ -250,6 +252,11 @@ impl WorkbenchState {
         self.layout_mode = self.layout_mode.toggled();
     }
 
+    pub(crate) fn toggle_density_mode(&mut self) {
+        self.density_mode = self.density_mode.toggled();
+        self.status = format!("density {}", self.density_mode.label());
+    }
+
     pub(crate) fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
     }
@@ -311,6 +318,7 @@ impl WorkbenchState {
     pub(crate) fn layout_preference(&self) -> LayoutPreference {
         LayoutPreference {
             mode: self.layout_mode,
+            density: self.density_mode,
             focus: self.focus,
             requests_percent: self.requests_percent,
             detail_percent: self.detail_percent,
@@ -1480,6 +1488,7 @@ pub(crate) enum PaletteCommand {
     SortNext,
     SortDirection,
     ToggleLayout,
+    ToggleDensity,
     ToggleHelp,
     OpenBrowser,
     RefreshPage,
@@ -1609,6 +1618,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "Layout: Toggle Focus",
         hint: "maximize pane",
         command: PaletteCommand::ToggleLayout,
+    },
+    PaletteEntry {
+        title: "Layout: Toggle Density",
+        hint: "compact comfortable chrome",
+        command: PaletteCommand::ToggleDensity,
     },
     PaletteEntry {
         title: "Open Browser",

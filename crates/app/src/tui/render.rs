@@ -1,6 +1,6 @@
 #![allow(clippy::items_after_test_module)]
 
-use super::layout::LayoutMode;
+use super::layout::{DensityMode, LayoutMode};
 use super::state::{
     BodyTreeItem, CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane, InputMode,
     RequestTreeMeta, RequestView, WorkbenchState, WorkbenchView, domain_for_url,
@@ -127,17 +127,32 @@ fn rail_item(label: &'static str, count: usize, active: bool, alert: bool) -> Li
 }
 
 fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
-    let root = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(3),
-            Constraint::Min(12),
-        ])
-        .split(area);
+    let root = match app.density_mode {
+        DensityMode::Compact => Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(12)])
+            .split(area),
+        DensityMode::Comfortable => Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(12),
+            ])
+            .split(area),
+    };
 
-    render_network_bar(frame, root[0], app);
-    render_stats_panel(frame, root[1], app);
+    let content_area = match app.density_mode {
+        DensityMode::Compact => {
+            render_network_compact_bar(frame, root[0], app);
+            root[1]
+        }
+        DensityMode::Comfortable => {
+            render_network_bar(frame, root[0], app);
+            render_stats_panel(frame, root[1], app);
+            root[2]
+        }
+    };
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
@@ -145,7 +160,7 @@ fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut Workben
             Constraint::Percentage(app.requests_percent),
             Constraint::Percentage(100 - app.requests_percent),
         ])
-        .split(root[2]);
+        .split(content_area);
 
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -364,8 +379,51 @@ fn render_network_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
             app.detail_percent,
             100 - app.detail_percent
         )),
+        Span::styled("   density ", muted_style()),
+        Span::raw(app.density_mode.label()),
     ]);
     frame.render_widget(Paragraph::new(line).style(Style::default().fg(GB_FG)), area);
+}
+
+fn render_network_compact_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
+    let stats = RequestStats::from(app);
+    let mut traffic_line = status_meter_line(&stats);
+    let mut spans = vec![
+        Span::styled("filter ", label_style()),
+        Span::raw(if app.request_filter.is_empty() {
+            "all".to_string()
+        } else {
+            compact_value(&app.request_filter, 36)
+        }),
+        Span::styled("  preset ", muted_style()),
+        Span::raw(app.active_filter_preset_label().unwrap_or("-")),
+        Span::raw("  "),
+    ];
+    spans.append(&mut traffic_line.spans);
+    spans.extend([
+        Span::raw("  "),
+        Span::styled("lat ", muted_style()),
+        Span::raw(
+            stats
+                .avg_duration_ms
+                .map(|value| format!("{value}ms"))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        Span::styled("  slow ", muted_style()),
+        Span::raw(stats.slow.to_string()),
+        Span::styled("  bytes ", muted_style()),
+        Span::raw(format_bytes(stats.total_size)),
+        Span::styled("  split ", muted_style()),
+        Span::raw(format!(
+            "{}:{}",
+            app.requests_percent,
+            100 - app.requests_percent
+        )),
+    ]);
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().fg(GB_FG)),
+        area,
+    );
 }
 
 fn render_stats_panel(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
@@ -928,6 +986,11 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
             Span::raw(app.layout_mode.label()),
         ]);
     }
+    status_spans.extend([
+        Span::raw("  "),
+        Span::styled("density ", label_style()),
+        Span::raw(app.density_mode.label()),
+    ]);
     match app.view {
         WorkbenchView::Console => {
             if !app.console_filter.is_empty() {
@@ -1032,6 +1095,8 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw("      "),
             Span::styled("m", key_style()),
             Span::raw(" maximize/focus  "),
+            Span::styled("z", key_style()),
+            Span::raw(" density  "),
             Span::styled("ctrl+left/right", key_style()),
             Span::raw(" request width  "),
             Span::styled("ctrl+up/down", key_style()),
@@ -1071,9 +1136,10 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
         Line::from(vec![
             Span::styled("current", label_style()),
             Span::raw(format!(
-                "     view={} focus={} filter={} split={}:{} / {}:{}",
+                "     view={} focus={} density={} filter={} split={}:{} / {}:{}",
                 app.view.label(),
                 app.focus.label(),
+                app.density_mode.label(),
                 active_filter_text(app),
                 app.requests_percent,
                 100 - app.requests_percent,
@@ -1203,6 +1269,8 @@ fn compact_help_line() -> Line<'static> {
         Span::raw(" filter  "),
         Span::styled("f", key_style()),
         Span::raw(" preset  "),
+        Span::styled("z", key_style()),
+        Span::raw(" density  "),
         Span::styled("1-4", key_style()),
         Span::raw(" views  "),
         Span::styled("R/D/B", key_style()),
@@ -2625,6 +2693,7 @@ mod tests {
             cookie_scroll: 0,
             input_mode: InputMode::Normal,
             layout_mode: LayoutMode::Normal,
+            density_mode: DensityMode::Compact,
             requests_percent: 48,
             detail_percent: 38,
             palette_query: String::new(),

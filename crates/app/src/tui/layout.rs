@@ -37,9 +37,39 @@ impl LayoutMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DensityMode {
+    Compact,
+    Comfortable,
+}
+
+impl DensityMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::Comfortable => "comfortable",
+        }
+    }
+
+    pub(crate) fn toggled(self) -> Self {
+        match self {
+            Self::Compact => Self::Comfortable,
+            Self::Comfortable => Self::Compact,
+        }
+    }
+
+    fn parse(value: &str) -> Self {
+        match value.trim() {
+            "comfortable" => Self::Comfortable,
+            _ => Self::Compact,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct LayoutPreference {
     pub(crate) mode: LayoutMode,
+    pub(crate) density: DensityMode,
     pub(crate) focus: FocusPane,
     pub(crate) requests_percent: u16,
     pub(crate) detail_percent: u16,
@@ -50,6 +80,7 @@ impl Default for LayoutPreference {
     fn default() -> Self {
         Self {
             mode: LayoutMode::Normal,
+            density: DensityMode::Compact,
             focus: FocusPane::Requests,
             requests_percent: DEFAULT_REQUESTS_PERCENT,
             detail_percent: DEFAULT_DETAIL_PERCENT,
@@ -74,6 +105,7 @@ impl LayoutPreference {
             };
             match key.trim() {
                 "mode" => preference.mode = LayoutMode::parse(value),
+                "density" => preference.density = DensityMode::parse(value),
                 "focus" => preference.focus = FocusPane::parse(value),
                 "requests_percent" => {
                     preference.requests_percent = parse_percent(value, DEFAULT_REQUESTS_PERCENT)
@@ -100,8 +132,9 @@ impl LayoutPreference {
         fs::write(
             &path,
             format!(
-                "mode={}\nfocus={}\nrequests_percent={}\ndetail_percent={}\nfilter_preset={}\n",
+                "mode={}\ndensity={}\nfocus={}\nrequests_percent={}\ndetail_percent={}\nfilter_preset={}\n",
                 self.mode.label(),
+                self.density.label(),
                 self.focus.label(),
                 self.requests_percent,
                 self.detail_percent,

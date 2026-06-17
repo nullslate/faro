@@ -172,6 +172,10 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
         KeyCode::Char('w') => InputOutcome::SaveExchange,
         KeyCode::Char('o') => InputOutcome::OpenBrowser,
         KeyCode::Char('m') => InputOutcome::ToggleMaximize,
+        KeyCode::Char('z') => {
+            app.toggle_density_mode();
+            InputOutcome::SaveLayout
+        }
         KeyCode::Char('e') if app.view == WorkbenchView::Console => InputOutcome::EditConsole,
         KeyCode::Char('e') => InputOutcome::OpenEditor,
         KeyCode::Char('r') => InputOutcome::Replay,
@@ -234,6 +238,10 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
             InputOutcome::Continue
         }
         PaletteCommand::ToggleLayout => InputOutcome::ToggleMaximize,
+        PaletteCommand::ToggleDensity => {
+            app.toggle_density_mode();
+            InputOutcome::SaveLayout
+        }
         PaletteCommand::ToggleHelp => {
             app.toggle_help();
             InputOutcome::Continue
