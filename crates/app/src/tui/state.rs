@@ -26,6 +26,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) collapsed_request_groups: HashSet<String>,
     pub(crate) active_request_route_group: Option<String>,
     pub(crate) sql_request_filter_ids: Option<HashSet<String>>,
+    pub(crate) sql_request_filter_query: Option<String>,
     pub(crate) console_logs: Vec<ConsoleLog>,
     pub(crate) filtered_console_indices: Vec<usize>,
     pub(crate) console_hidden_before: Option<UnixMillis>,
@@ -151,6 +152,7 @@ impl WorkbenchState {
             collapsed_request_groups: HashSet::new(),
             active_request_route_group: None,
             sql_request_filter_ids: None,
+            sql_request_filter_query: None,
             console_logs,
             filtered_console_indices,
             console_hidden_before: None,
@@ -279,6 +281,7 @@ impl WorkbenchState {
         let count = ids.len();
         self.last_sql_query = query;
         self.sql_request_filter_ids = Some(ids);
+        self.sql_request_filter_query = Some(self.last_sql_query.clone());
         self.sql_result = None;
         self.set_view(WorkbenchView::Network);
         self.apply_filter();
@@ -477,7 +480,11 @@ impl WorkbenchState {
             self.status = "already at request root".to_string();
             return;
         };
-        self.status = format!("left {}", route_label_for_group(&group));
+        self.active_request_route_group = parent_group_key(&group);
+        self.status = match &self.active_request_route_group {
+            Some(parent) => format!("up to {}", route_label_for_group(parent)),
+            None => format!("left {}", route_label_for_group(&group)),
+        };
         self.apply_filter();
     }
 
@@ -709,6 +716,7 @@ impl WorkbenchState {
             _ => {
                 self.request_filter.clear();
                 self.sql_request_filter_ids = None;
+                self.sql_request_filter_query = None;
                 self.apply_filter();
             }
         }
@@ -1157,9 +1165,40 @@ impl WorkbenchState {
         self.active_request_route_group.clone()
     }
 
-    pub(crate) fn active_expanded_request_route(&self) -> Option<String> {
+    pub(crate) fn active_request_route_breadcrumb(&self) -> Option<String> {
         self.active_expanded_request_group()
-            .map(|group| route_label_for_group(&group))
+            .map(|group| route_breadcrumb_for_group(&group))
+    }
+
+    pub(crate) fn active_route_summary(&self) -> Option<RouteSummary> {
+        self.active_request_route_group.as_ref()?;
+        let mut summary = RouteSummary::default();
+        for index in &self.filtered_request_indices {
+            let Some(request) = self.requests.get(*index) else {
+                continue;
+            };
+            summary.count += 1;
+            match request.status_code() {
+                Some(400..=599) => summary.errors += 1,
+                None => summary.pending += 1,
+                _ => {}
+            }
+            if let Some(duration) = request.duration_ms() {
+                summary.max_duration_ms =
+                    Some(summary.max_duration_ms.unwrap_or(duration).max(duration));
+                if duration >= 500 {
+                    summary.slow += 1;
+                }
+            }
+            if let Some(size) = request
+                .response
+                .as_ref()
+                .and_then(|response| response.body_size)
+            {
+                summary.total_size += size;
+            }
+        }
+        Some(summary)
     }
 
     pub(crate) fn request_route_remainder(&self, request_index: usize) -> Option<String> {
@@ -1855,6 +1894,16 @@ pub(crate) struct SqlResultsView {
     pub(crate) rows: Vec<Vec<String>>,
     pub(crate) duration_ms: u128,
     pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RouteSummary {
+    pub(crate) count: usize,
+    pub(crate) errors: usize,
+    pub(crate) pending: usize,
+    pub(crate) slow: usize,
+    pub(crate) total_size: i64,
+    pub(crate) max_duration_ms: Option<i64>,
 }
 
 fn fuzzy_contains(haystack: &str, needle: &str) -> bool {
@@ -2981,6 +3030,18 @@ fn route_label_for_group(group_key: &str) -> String {
     }
 }
 
+fn route_breadcrumb_for_group(group_key: &str) -> String {
+    group_key.split('/').collect::<Vec<_>>().join(" / ")
+}
+
+fn parent_group_key(group_key: &str) -> Option<String> {
+    let mut parts = group_key.split('/').collect::<Vec<_>>();
+    (parts.len() > 2).then(|| {
+        parts.pop();
+        parts.join("/")
+    })
+}
+
 fn group_path_segment_count(group_key: &str) -> usize {
     group_key.split('/').skip(1).count()
 }
@@ -3157,5 +3218,10 @@ mod tests {
             "localhost:5173/api/users/:id"
         );
         assert_eq!(group_path_segment_count("localhost:5173/api/users/:id"), 3);
+        assert_eq!(
+            parent_group_key("localhost:5173/api/users/:id"),
+            Some("localhost:5173/api/users".to_string())
+        );
+        assert_eq!(parent_group_key("localhost:5173/api"), None);
     }
 }

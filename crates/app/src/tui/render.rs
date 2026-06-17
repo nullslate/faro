@@ -139,7 +139,11 @@ fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut Workben
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Length(3),
+                Constraint::Length(if app.active_route_summary().is_some() {
+                    4
+                } else {
+                    3
+                }),
                 Constraint::Min(12),
             ])
             .split(area),
@@ -393,10 +397,12 @@ fn render_network_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
         ),
         Span::styled("   route ", muted_style()),
         Span::raw(
-            app.active_expanded_request_route()
-                .map(|route| compact_value(&route, 48))
+            app.active_request_route_breadcrumb()
+                .map(|route| compact_value(&route, 56))
                 .unwrap_or_else(|| "-".to_string()),
         ),
+        Span::raw("   "),
+        route_summary_span(app, 64),
     ]);
     frame.render_widget(Paragraph::new(line).style(Style::default().fg(GB_FG)), area);
 }
@@ -422,10 +428,12 @@ fn render_network_compact_bar(frame: &mut ratatui::Frame, area: Rect, app: &Work
         ),
         Span::styled("  route ", muted_style()),
         Span::raw(
-            app.active_expanded_request_route()
+            app.active_request_route_breadcrumb()
                 .map(|route| compact_value(&route, 36))
                 .unwrap_or_else(|| "-".to_string()),
         ),
+        Span::raw("  "),
+        route_summary_span(app, 42),
         Span::raw("  "),
     ];
     spans.append(&mut traffic_line.spans);
@@ -491,6 +499,13 @@ fn render_stats_panel(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
             Span::raw(format_bytes(stats.total_size)),
         ]),
     ];
+    let lines = if app.active_route_summary().is_some() {
+        let mut lines = lines;
+        lines.push(Line::from(vec![route_summary_span(app, 120)]));
+        lines
+    } else {
+        lines
+    };
     frame.render_widget(
         Paragraph::new(lines)
             .block(panel_block("Signal", false))
@@ -1027,6 +1042,20 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
             Span::raw("  "),
             Span::styled("sql ", label_style()),
             Span::raw(format!("{} ids", ids.len())),
+        ]);
+    }
+    if let Some(query) = &app.sql_request_filter_query {
+        status_spans.extend([
+            Span::raw("  "),
+            Span::styled("sql_query ", label_style()),
+            Span::raw(compact_value(&query.replace('\n', " "), 64)),
+        ]);
+    }
+    if let Some(route) = app.active_request_route_breadcrumb() {
+        status_spans.extend([
+            Span::raw("  "),
+            Span::styled("route ", label_style()),
+            Span::raw(compact_value(&route, 72)),
         ]);
     }
     match app.view {
@@ -1732,16 +1761,44 @@ fn requests_title(app: &WorkbenchState) -> String {
         .as_ref()
         .map(|ids| format!(" sql:{}", ids.len()))
         .unwrap_or_default();
+    let route = app
+        .active_request_route_breadcrumb()
+        .map(|route| format!(" route:{}", compact_value(&route, 32)))
+        .unwrap_or_default();
     if app.request_filter.is_empty() {
-        format!(" Requests{sql_filter} ")
+        format!(" Requests{sql_filter}{route} ")
     } else {
         format!(
-            " Requests{sql_filter} /{} ({}/{}) ",
+            " Requests{sql_filter}{route} /{} ({}/{}) ",
             app.request_filter,
             app.filtered_request_indices.len(),
             app.requests.len()
         )
     }
+}
+
+fn route_summary_span(app: &WorkbenchState, max_width: usize) -> Span<'static> {
+    let Some(summary) = app.active_route_summary() else {
+        return Span::raw("");
+    };
+    Span::styled(
+        compact_value(
+            &format!(
+                "route_stats {} req · {} err · {} slow · {} pending · max {} · {}",
+                summary.count,
+                summary.errors,
+                summary.slow,
+                summary.pending,
+                summary
+                    .max_duration_ms
+                    .map(|duration| format!("{duration}ms"))
+                    .unwrap_or_else(|| "-".to_string()),
+                format_bytes(summary.total_size)
+            ),
+            max_width,
+        ),
+        muted_style(),
+    )
 }
 
 fn filter_highlight_terms(filter: &str) -> Vec<String> {
@@ -2913,6 +2970,7 @@ mod tests {
             collapsed_request_groups: std::collections::HashSet::new(),
             active_request_route_group: None,
             sql_request_filter_ids: None,
+            sql_request_filter_query: None,
             console_logs: Vec::new(),
             filtered_console_indices: Vec::new(),
             console_hidden_before: None,
