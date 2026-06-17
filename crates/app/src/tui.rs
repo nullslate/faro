@@ -12,12 +12,12 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use devbench_cdp::{CaptureOptions, CaptureUpdate};
-use devbench_core::{
+use faro_cdp::{CaptureOptions, CaptureUpdate};
+use faro_core::{
     ConsoleLevel, ConsoleLog, CookieEventRecord, ReplayRecord, StorageEventRecord, console_event,
     cookie_event_observed_event, request_replayed_event, storage_changed_event,
 };
-use devbench_store::{Store, inline_text_body};
+use faro_store::{Store, inline_text_body};
 use input::{InputOutcome, handle_key};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -402,7 +402,7 @@ fn open_browser(app: &mut WorkbenchState, config: &mut RunConfig) {
         return;
     };
 
-    config.updates = Some(devbench_cdp::spawn_capture(capture_options));
+    config.updates = Some(faro_cdp::spawn_capture(capture_options));
     app.status = "opening browser and starting capture".to_string();
 }
 
@@ -426,7 +426,7 @@ fn save_selected_exchange(app: &mut WorkbenchState) {
         return;
     };
     let exchange = format_exchange(request);
-    match write_temp_file("devbench-exchange", "http", &exchange) {
+    match write_temp_file("faro-exchange", "http", &exchange) {
         Ok(path) => app.status = format!("saved exchange {}", path.display()),
         Err(error) => app.status = format!("save failed: {error}"),
     }
@@ -441,7 +441,7 @@ fn copy_curl(app: &mut WorkbenchState) {
 
     match copy_to_clipboard(&curl) {
         Ok(tool) => app.status = format!("copied full request as curl with {tool}"),
-        Err(error) => match write_temp_file("devbench-curl", "sh", &curl) {
+        Err(error) => match write_temp_file("faro-curl", "sh", &curl) {
             Ok(path) => {
                 app.status = format!("clipboard unavailable ({error}); wrote {}", path.display())
             }
@@ -482,15 +482,15 @@ fn edit_console_expression(
     };
 
     let template = [
-        "// Devbench console scratch",
+        "// Faro console scratch",
         "// Return a value or await a promise. This runs in the inspected page.",
         "",
         "document.title",
         "",
     ]
     .join("\n");
-    let path = write_temp_file("devbench-console", "js", &template)
-        .context("write console scratch file")?;
+    let path =
+        write_temp_file("faro-console", "js", &template).context("write console scratch file")?;
     run_editor(terminal, app, &path).context("run editor for console scratch")?;
     let expression = fs::read_to_string(&path)
         .with_context(|| format!("read console scratch file {}", path.display()))?;
@@ -506,7 +506,7 @@ fn edit_console_expression(
         return Ok(());
     }
 
-    match devbench_cdp::evaluate_expression_blocking(&websocket_url, &expression) {
+    match faro_cdp::evaluate_expression_blocking(&websocket_url, &expression) {
         Ok(result) => {
             persist_console_eval(app, ConsoleLevel::Info, format!("> {expression}\n{result}"))
                 .context("persist console eval result")?;
@@ -537,13 +537,10 @@ fn edit_sql_query(
         ("DATABASE_URL", database_url),
         ("SQLITE_DATABASE_PATH", app.db_path.display().to_string()),
         (
-            "DEVBENCH_SQL_SCHEMA",
+            "FARO_SQL_SCHEMA",
             workspace.schema_path.display().to_string(),
         ),
-        (
-            "DEVBENCH_SQL_WORKSPACE",
-            workspace.dir.display().to_string(),
-        ),
+        ("FARO_SQL_WORKSPACE", workspace.dir.display().to_string()),
     ];
     run_editor_with_env(terminal, app, &path, &editor_env).context("run editor for SQL query")?;
     let query = fs::read_to_string(&path)
@@ -568,7 +565,7 @@ struct SqlEditorWorkspace {
 
 fn create_sql_workspace(app: &WorkbenchState) -> anyhow::Result<SqlEditorWorkspace> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-    let dir = env::temp_dir().join(format!("devbench-sql-{}-{now}", std::process::id()));
+    let dir = env::temp_dir().join(format!("faro-sql-{}-{now}", std::process::id()));
     fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     let schema_path = dir.join("schema.sql");
     let query_path = dir.join("query.sql");
@@ -598,7 +595,7 @@ fn sql_language_server_config(app: &WorkbenchState) -> String {
         r#"{{
   "connections": [
     {{
-      "name": "devbench",
+      "name": "faro",
       "adapter": "sqlite3",
       "filename": "{}"
     }}
@@ -611,7 +608,7 @@ fn sql_language_server_config(app: &WorkbenchState) -> String {
 
 fn sqls_config(app: &WorkbenchState) -> String {
     format!(
-        "connections:\n  - alias: devbench\n    driver: sqlite3\n    dataSourceName: \"{}\"\n",
+        "connections:\n  - alias: faro\n    driver: sqlite3\n    dataSourceName: \"{}\"\n",
         yaml_double_quote_escape(&app.db_path.display().to_string())
     )
 }
@@ -635,14 +632,14 @@ LIMIT 50;"
     };
     let database_url = format!("sqlite://{}", app.db_path.display());
     [
-        "-- Devbench SQL Query",
+        "-- Faro SQL Query",
         "-- Read-only, single-statement queries only. SELECT, WITH, VALUES, and EXPLAIN are allowed.",
         "-- Filetype is .sql so your editor/LSP should attach normally.",
         "--",
         &format!("-- Database: {}", app.db_path.display()),
         &format!("-- Database URL: {database_url}"),
         &format!("-- Schema sidecar: {}", schema_path.display()),
-        "-- Env while editor is open: DATABASE_URL, SQLITE_DATABASE_PATH, DEVBENCH_SQL_SCHEMA.",
+        "-- Env while editor is open: DATABASE_URL, SQLITE_DATABASE_PATH, FARO_SQL_SCHEMA.",
         "-- Workspace also includes .sqllsrc.json and .sqls.yml for common SQL LSPs.",
         "--",
         "-- Recent requests:",
@@ -666,10 +663,7 @@ LIMIT 50;"
     .join("\n")
 }
 
-fn sql_request_ids(
-    app: &WorkbenchState,
-    result: &devbench_store::SqlQueryResult,
-) -> HashSet<String> {
+fn sql_request_ids(app: &WorkbenchState, result: &faro_store::SqlQueryResult) -> HashSet<String> {
     let known_ids = app
         .requests
         .iter()
@@ -732,7 +726,7 @@ fn refresh_page(app: &mut WorkbenchState) {
         return;
     };
 
-    match devbench_cdp::reload_page_blocking(&websocket_url) {
+    match faro_cdp::reload_page_blocking(&websocket_url) {
         Ok(()) => {
             app.status = "page refresh requested".to_string();
         }
@@ -761,7 +755,7 @@ fn persist_console_eval(
         None,
         level,
         message,
-        Some("devbench-console".to_string()),
+        Some("faro-console".to_string()),
         None,
     );
     store
@@ -846,7 +840,7 @@ fn edit_and_replay_selected_request(
         app.status = "no request selected".to_string();
         return Ok(());
     };
-    let path = write_temp_file("devbench-edit-replay", "http", &editable)
+    let path = write_temp_file("faro-edit-replay", "http", &editable)
         .context("write editable replay request")?;
     run_editor(terminal, app, &path).context("run editor for replay request")?;
 
@@ -892,7 +886,7 @@ fn replay_with_curl(
                 response_output.extend_from_slice(b"\n\n--- stderr ---\n");
                 response_output.extend_from_slice(&output.stderr);
             }
-            match write_temp_bytes("devbench-replay", "http", &response_output) {
+            match write_temp_bytes("faro-replay", "http", &response_output) {
                 Ok(path) => {
                     replay.output_path = Some(path.display().to_string());
                     let body_text = split_http_body(&output.stdout);
@@ -951,9 +945,9 @@ fn diff_selected_replay(
         return Ok(());
     };
     let original_path =
-        write_temp_file("devbench-original", "txt", &original).context("write original body")?;
+        write_temp_file("faro-original", "txt", &original).context("write original body")?;
     let replay_path =
-        write_temp_file("devbench-replay-body", "txt", &replay).context("write replay body")?;
+        write_temp_file("faro-replay-body", "txt", &replay).context("write replay body")?;
 
     if command_exists("nvim") {
         suspend_terminal_for_editor(terminal).context("suspend terminal before nvim diff")?;
@@ -985,14 +979,14 @@ fn diff_selected_replay(
     } else {
         b"diff unavailable; original/replay files written".to_vec()
     };
-    let diff_path = write_temp_bytes("devbench-diff", "diff", &diff).context("write diff file")?;
+    let diff_path = write_temp_bytes("faro-diff", "diff", &diff).context("write diff file")?;
     app.status = format!("wrote diff {}", diff_path.display());
     Ok(())
 }
 
 fn persist_replay_body_and_record(
     app: &WorkbenchState,
-    body: &devbench_core::BodyRecord,
+    body: &faro_core::BodyRecord,
     replay: &ReplayRecord,
 ) -> anyhow::Result<()> {
     let store = Store::open(&app.db_path)
@@ -1040,7 +1034,7 @@ fn open_selected_item_in_editor(
         return Ok(());
     };
     let path =
-        write_temp_file("devbench-body", &extension, &body).context("write selected body file")?;
+        write_temp_file("faro-body", &extension, &body).context("write selected body file")?;
     run_editor(terminal, app, &path).context("run editor for selected body")?;
     Ok(())
 }
@@ -1057,13 +1051,13 @@ fn edit_selected_storage_value(
         app.status = "storage edit unavailable: open browser with o first".to_string();
         return Ok(());
     };
-    let path = write_temp_file("devbench-storage", "txt", &entry.value)
-        .context("write storage edit file")?;
+    let path =
+        write_temp_file("faro-storage", "txt", &entry.value).context("write storage edit file")?;
     run_editor(terminal, app, &path).context("run editor for storage value")?;
     let value = fs::read_to_string(&path)
         .with_context(|| format!("read edited storage value {}", path.display()))?;
 
-    match devbench_cdp::set_storage_item_blocking(
+    match faro_cdp::set_storage_item_blocking(
         &websocket_url,
         &entry.origin,
         &entry.storage_type,
@@ -1092,15 +1086,15 @@ fn edit_selected_cookie_value(
         app.status = "cookie edit unavailable: open browser with o first".to_string();
         return Ok(());
     };
-    let path = write_temp_file("devbench-cookie", "txt", &entry.value)
-        .context("write cookie edit file")?;
+    let path =
+        write_temp_file("faro-cookie", "txt", &entry.value).context("write cookie edit file")?;
     run_editor(terminal, app, &path).context("run editor for cookie value")?;
     let value = fs::read_to_string(&path)
         .with_context(|| format!("read edited cookie value {}", path.display()))?;
     let mut cookie = entry.to_cookie_record();
     cookie.value = value.clone();
 
-    match devbench_cdp::set_cookie_value_blocking(&websocket_url, &cookie, &value) {
+    match faro_cdp::set_cookie_value_blocking(&websocket_url, &cookie, &value) {
         Ok(()) => {
             persist_cookie_edit(app, &entry, &value).context("persist cookie edit")?;
             app.reload().context("reload state after cookie edit")?;
@@ -1359,11 +1353,11 @@ fn sql_query_path() -> Option<PathBuf> {
     if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
         && !config_home.is_empty()
     {
-        return Some(PathBuf::from(config_home).join("devbench/last.sql"));
+        return Some(PathBuf::from(config_home).join("faro/last.sql"));
     }
 
     match env::var("HOME") {
-        Ok(home) if !home.is_empty() => Some(PathBuf::from(home).join(".config/devbench/last.sql")),
+        Ok(home) if !home.is_empty() => Some(PathBuf::from(home).join(".config/faro/last.sql")),
         _ => None,
     }
 }

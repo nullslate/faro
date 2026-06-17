@@ -5,9 +5,9 @@ use crate::{
     request_matches_route, request_rows_for_session,
 };
 use anyhow::{Context, bail};
-use devbench_cdp::CaptureUpdate;
-use devbench_core::{ReplayRecord, request_replayed_event};
-use devbench_store::inline_text_body;
+use faro_cdp::CaptureUpdate;
+use faro_core::{ReplayRecord, request_replayed_event};
+use faro_store::inline_text_body;
 use serde_json::{Map, Value, json};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
@@ -51,7 +51,7 @@ fn handle_message(options: &CliOptions, request: Value) -> Option<Value> {
                 }
             },
             "serverInfo": {
-                "name": "devbench",
+                "name": "faro",
                 "version": env!("CARGO_PKG_VERSION")
             }
         })),
@@ -115,7 +115,7 @@ fn capture_url_tool(options: &CliOptions, args: &Value) -> anyhow::Result<Value>
         attach_port: options.attach_port,
         launch_port: options.launch_port,
     };
-    let updates = devbench_cdp::spawn_capture(capture_options);
+    let updates = faro_cdp::spawn_capture(capture_options);
     let deadline = Instant::now() + duration;
     let mut events = Vec::new();
     while Instant::now() < deadline {
@@ -141,7 +141,7 @@ fn capture_url_tool(options: &CliOptions, args: &Value) -> anyhow::Result<Value>
 fn list_requests_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let store = open_store(&db_path.to_path_buf())?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let filter = optional_string(args, "filter");
     let route = optional_string(args, "route");
@@ -214,7 +214,7 @@ fn get_response_body_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value>
 fn list_console_errors_tool(db_path: &Path) -> anyhow::Result<Value> {
     let store = open_store(&db_path.to_path_buf())?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let errors = store
         .console_logs_for_session(&session.id)
@@ -223,7 +223,7 @@ fn list_console_errors_tool(db_path: &Path) -> anyhow::Result<Value> {
         .filter(|log| {
             matches!(
                 log.level,
-                devbench_core::ConsoleLevel::Error | devbench_core::ConsoleLevel::Fatal
+                faro_core::ConsoleLevel::Error | faro_core::ConsoleLevel::Fatal
             )
         })
         .collect::<Vec<_>>();
@@ -235,7 +235,7 @@ fn get_storage_item_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> 
     let key = required_string(args, "key")?;
     let store = open_store(&db_path.to_path_buf())?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let items = current_storage_items(&store, &session.id)?
         .into_iter()
@@ -247,7 +247,7 @@ fn get_storage_item_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> 
 fn list_cookies_tool(db_path: &Path) -> anyhow::Result<Value> {
     let store = open_store(&db_path.to_path_buf())?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     Ok(json!({
         "session_id": session.id,
@@ -311,7 +311,7 @@ fn replay_request_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
 
 fn run_readonly_sql_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let query = required_string(args, "query")?;
-    let result = devbench_store::Store::query_readonly(db_path, &query)
+    let result = faro_store::Store::query_readonly(db_path, &query)
         .with_context(|| format!("run read-only SQL against {}", db_path.display()))?;
     let rows = result
         .rows
@@ -421,7 +421,7 @@ fn tools() -> Value {
     json!([
         tool(
             "capture_url",
-            "Launch or attach Chrome, capture a URL for a bounded duration, and persist observations in the Devbench DB.",
+            "Launch or attach Chrome, capture a URL for a bounded duration, and persist observations in the Faro DB.",
             object_schema(
                 &[
                     ("url", "string", "URL to open and capture."),
@@ -464,7 +464,7 @@ fn tools() -> Value {
             "Get a captured request and response by request id.",
             object_schema(
                 &[
-                    ("request_id", "string", "Devbench request id."),
+                    ("request_id", "string", "Faro request id."),
                     (
                         "include_body",
                         "boolean",
@@ -478,7 +478,7 @@ fn tools() -> Value {
             "get_response_body",
             "Get the captured response body for a request id.",
             object_schema(
-                &[("request_id", "string", "Devbench request id.")],
+                &[("request_id", "string", "Faro request id.")],
                 &["request_id"]
             )
         ),
@@ -507,7 +507,7 @@ fn tools() -> Value {
             "copy_request_as_curl",
             "Build a shareable curl command for a captured request.",
             object_schema(
-                &[("request_id", "string", "Devbench request id.")],
+                &[("request_id", "string", "Faro request id.")],
                 &["request_id"]
             )
         ),
@@ -515,13 +515,13 @@ fn tools() -> Value {
             "replay_request",
             "Replay a captured request with curl and persist the replay record.",
             object_schema(
-                &[("request_id", "string", "Devbench request id.")],
+                &[("request_id", "string", "Faro request id.")],
                 &["request_id"]
             )
         ),
         tool(
             "run_readonly_sql",
-            "Run a read-only SQL query against the Devbench SQLite database.",
+            "Run a read-only SQL query against the Faro SQLite database.",
             object_schema(&[("query", "string", "Read-only SQL query.")], &["query"])
         )
     ])

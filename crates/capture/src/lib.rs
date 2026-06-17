@@ -1,10 +1,10 @@
-use devbench_core::{
+use faro_core::{
     ConsoleLevel, ConsoleLog, EventEnvelope, Header, Id, RequestRecord, RequestStatus,
     ResponseRecord, StorageEventRecord, console_event, now_ms, page_error_event,
     page_route_changed_event, request_completed_event, request_started_event,
     response_received_event, storage_changed_event,
 };
-use devbench_store::{Store, StoreError, inline_text_body};
+use faro_store::{Store, StoreError, inline_text_body};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -286,7 +286,7 @@ impl EventIngestor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devbench_core::{Run, RunTrigger, Session, Tab};
+    use faro_core::{Run, RunTrigger, Session, Tab};
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 

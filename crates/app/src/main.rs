@@ -4,12 +4,12 @@ mod tui;
 
 use anyhow::{Context, bail};
 use config::AppConfig;
-use devbench_cdp::{CaptureOptions, CaptureUpdate};
-use devbench_core::{
+use faro_cdp::{CaptureOptions, CaptureUpdate};
+use faro_core::{
     BodyRecord, ConsoleLevel, CookieRecord, Header, ReplayRecord, RequestRecord, ResponseRecord,
     Session, request_replayed_event,
 };
-use devbench_store::{Store, inline_text_body};
+use faro_store::{Store, inline_text_body};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let app_config = config::load_or_create().context("load devbench config")?;
+    let app_config = config::load_or_create().context("load faro config")?;
     let (options, mut args) = parse_args(std::env::args().skip(1).collect(), &app_config)
         .context("parse command line arguments")?;
     if args.is_empty() || matches!(args[0].as_str(), "-h" | "--help" | "help") {
@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
                 launch_port: options.launch_port,
             };
             let run_config = if options.attach_port.is_some() || options.launch_on_start {
-                tui::RunConfig::capturing(devbench_cdp::spawn_capture(capture_options))
+                tui::RunConfig::capturing(faro_cdp::spawn_capture(capture_options))
             } else {
                 tui::RunConfig::lazy(capture_options)
             };
@@ -151,7 +151,7 @@ fn handle_capture(options: CliOptions, args: Vec<String>) -> anyhow::Result<()> 
             "--json" => json_output = true,
             "--for" | "--duration" => {
                 let Some(value) = iter.next() else {
-                    bail!("usage: devbench capture <url> [--for <duration>] [--json]");
+                    bail!("usage: faro capture <url> [--for <duration>] [--json]");
                 };
                 duration = Some(parse_duration(&value)?);
             }
@@ -159,10 +159,10 @@ fn handle_capture(options: CliOptions, args: Vec<String>) -> anyhow::Result<()> 
         }
     }
     let Some(url) = positional.first().cloned() else {
-        bail!("usage: devbench capture <url> [--for <duration>] [--json]");
+        bail!("usage: faro capture <url> [--for <duration>] [--json]");
     };
     if positional.len() > 1 {
-        bail!("usage: devbench capture <url> [--for <duration>] [--json]");
+        bail!("usage: faro capture <url> [--for <duration>] [--json]");
     }
 
     let capture_options = CaptureOptions {
@@ -171,7 +171,7 @@ fn handle_capture(options: CliOptions, args: Vec<String>) -> anyhow::Result<()> 
         attach_port: options.attach_port,
         launch_port: options.launch_port,
     };
-    let updates = devbench_cdp::spawn_capture(capture_options);
+    let updates = faro_cdp::spawn_capture(capture_options);
     let deadline = duration.map(|duration| Instant::now() + duration);
     if !json_output {
         println!("capturing into {}", options.db_path.display());
@@ -285,13 +285,13 @@ fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
             "--json" => json_output = true,
             "--filter" => {
                 let Some(value) = iter.next() else {
-                    bail!("usage: devbench requests [--route <route>] [--filter <expr>] [--json]");
+                    bail!("usage: faro requests [--route <route>] [--filter <expr>] [--json]");
                 };
                 filter = Some(value);
             }
             "--route" => {
                 let Some(value) = iter.next() else {
-                    bail!("usage: devbench requests [--route <route>] [--filter <expr>] [--json]");
+                    bail!("usage: faro requests [--route <route>] [--filter <expr>] [--json]");
                 };
                 route = Some(value);
             }
@@ -301,7 +301,7 @@ fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
 
     let store = open_store(db_path)?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let rows = request_rows_for_session(&store, &session.id)?
         .into_iter()
@@ -331,17 +331,17 @@ fn handle_requests(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
 
 fn handle_request(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
     let Some(command) = args.first().cloned() else {
-        bail!("usage: devbench request <get|curl> <id> [--body] [--json]");
+        bail!("usage: faro request <get|curl> <id> [--body] [--json]");
     };
     args.remove(0);
     if command == "curl" {
         return handle_request_curl(db_path, args);
     }
     if command != "get" {
-        bail!("usage: devbench request <get|curl> <id> [--body] [--json]");
+        bail!("usage: faro request <get|curl> <id> [--body] [--json]");
     }
     let Some(request_id) = args.first().cloned() else {
-        bail!("usage: devbench request get <id> [--body] [--json]");
+        bail!("usage: faro request get <id> [--body] [--json]");
     };
     args.remove(0);
 
@@ -392,7 +392,7 @@ fn handle_request(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
 
 fn handle_request_curl(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
     let Some(request_id) = args.first().cloned() else {
-        bail!("usage: devbench request curl <id> [--json]");
+        bail!("usage: faro request curl <id> [--json]");
     };
     args.remove(0);
     let json_output = args.iter().any(|arg| arg == "--json");
@@ -422,7 +422,7 @@ fn handle_request_curl(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Resu
 
 fn handle_console(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
     if args.first().map(String::as_str) != Some("errors") {
-        bail!("usage: devbench console errors [--json]");
+        bail!("usage: faro console errors [--json]");
     }
     args.remove(0);
     let json_output = args.iter().any(|arg| arg == "--json");
@@ -434,7 +434,7 @@ fn handle_console(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
 
     let store = open_store(db_path)?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let logs = store
         .console_logs_for_session(&session.id)
@@ -460,15 +460,15 @@ fn handle_console(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
 
 fn handle_storage(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
     if args.first().map(String::as_str) != Some("get") {
-        bail!("usage: devbench storage get <localStorage|sessionStorage> <key> [--json]");
+        bail!("usage: faro storage get <localStorage|sessionStorage> <key> [--json]");
     }
     args.remove(0);
     let Some(storage_type) = args.first().cloned() else {
-        bail!("usage: devbench storage get <localStorage|sessionStorage> <key> [--json]");
+        bail!("usage: faro storage get <localStorage|sessionStorage> <key> [--json]");
     };
     args.remove(0);
     let Some(key) = args.first().cloned() else {
-        bail!("usage: devbench storage get <localStorage|sessionStorage> <key> [--json]");
+        bail!("usage: faro storage get <localStorage|sessionStorage> <key> [--json]");
     };
     args.remove(0);
     let json_output = args.iter().any(|arg| arg == "--json");
@@ -480,7 +480,7 @@ fn handle_storage(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
 
     let store = open_store(db_path)?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let items = current_storage_items(&store, &session.id)?
         .into_iter()
@@ -499,7 +499,7 @@ fn handle_storage(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
 
 fn handle_cookies(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
     if args.first().map(String::as_str) != Some("list") {
-        bail!("usage: devbench cookies list [--json]");
+        bail!("usage: faro cookies list [--json]");
     }
     args.remove(0);
     let json_output = args.iter().any(|arg| arg == "--json");
@@ -511,7 +511,7 @@ fn handle_cookies(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
 
     let store = open_store(db_path)?;
     let Some(session) = latest_session(&store)? else {
-        bail!("no devbench sessions found");
+        bail!("no faro sessions found");
     };
     let cookies = latest_cookies(&store, &session.id)?;
     if json_output {
@@ -538,7 +538,7 @@ fn handle_sql(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
         }
     }
     if query_parts.is_empty() {
-        bail!("usage: devbench sql <readonly-query> [--json]");
+        bail!("usage: faro sql <readonly-query> [--json]");
     }
 
     let query = query_parts.join(" ");
@@ -582,10 +582,10 @@ fn handle_replay(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
         }
     }
     let Some(request_id) = positional.first().cloned() else {
-        bail!("usage: devbench replay <request-id> [--json]");
+        bail!("usage: faro replay <request-id> [--json]");
     };
     if positional.len() > 1 {
-        bail!("usage: devbench replay <request-id> [--json]");
+        bail!("usage: faro replay <request-id> [--json]");
     }
 
     if !command_exists("curl") {
@@ -670,13 +670,13 @@ fn parse_args(
         match arg.as_str() {
             "--db" => {
                 let Some(path) = iter.next() else {
-                    bail!("usage: devbench [--db <db-path>] <http-url>");
+                    bail!("usage: faro [--db <db-path>] <http-url>");
                 };
                 options.db_path = PathBuf::from(path);
             }
             "--attach-port" => {
                 let Some(port) = iter.next() else {
-                    bail!("usage: devbench [--attach-port <port>] <http-url>");
+                    bail!("usage: faro [--attach-port <port>] <http-url>");
                 };
                 options.attach_port = Some(
                     port.parse()
@@ -685,7 +685,7 @@ fn parse_args(
             }
             "--cdp-port" => {
                 let Some(port) = iter.next() else {
-                    bail!("usage: devbench [--cdp-port <port>] <http-url>");
+                    bail!("usage: faro [--cdp-port <port>] <http-url>");
                 };
                 options.launch_port = Some(
                     port.parse()
@@ -1294,24 +1294,24 @@ fn latest_session_url(db_path: &PathBuf) -> anyhow::Result<Option<String>> {
 }
 
 fn print_help() {
-    println!("devbench");
+    println!("faro");
     println!();
     println!("usage:");
-    println!("  devbench [--db <db-path>] [--cdp-port <port>] <http-url>");
-    println!("  devbench [--db <db-path>] --attach-port <port> <http-url>");
-    println!("  devbench [--db <db-path>] --launch-on-start <http-url>");
-    println!("  devbench mcp");
-    println!("  devbench capture <http-url> [--for <duration>] [--json]");
-    println!("  devbench tui [db-path]");
-    println!("  devbench show [db-path]");
-    println!("  devbench requests [--route <route>] [--filter <expr>] [--json]");
-    println!("  devbench request get <id> [--body] [--json]");
-    println!("  devbench request curl <id> [--json]");
-    println!("  devbench console errors [--json]");
-    println!("  devbench storage get <localStorage|sessionStorage> <key> [--json]");
-    println!("  devbench cookies list [--json]");
-    println!("  devbench replay <request-id> [--json]");
-    println!("  devbench sql <readonly-query> [--json]");
+    println!("  faro [--db <db-path>] [--cdp-port <port>] <http-url>");
+    println!("  faro [--db <db-path>] --attach-port <port> <http-url>");
+    println!("  faro [--db <db-path>] --launch-on-start <http-url>");
+    println!("  faro mcp");
+    println!("  faro capture <http-url> [--for <duration>] [--json]");
+    println!("  faro tui [db-path]");
+    println!("  faro show [db-path]");
+    println!("  faro requests [--route <route>] [--filter <expr>] [--json]");
+    println!("  faro request get <id> [--body] [--json]");
+    println!("  faro request curl <id> [--json]");
+    println!("  faro console errors [--json]");
+    println!("  faro storage get <localStorage|sessionStorage> <key> [--json]");
+    println!("  faro cookies list [--json]");
+    println!("  faro replay <request-id> [--json]");
+    println!("  faro sql <readonly-query> [--json]");
     println!();
     println!("keys:");
     println!("  q/esc quit");

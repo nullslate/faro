@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "devbench": {
-      "command": "devbench",
+    "faro": {
+      "command": "faro",
       "args": ["mcp"]
     }
   }

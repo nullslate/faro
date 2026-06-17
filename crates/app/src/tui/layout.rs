@@ -161,13 +161,11 @@ fn preference_path() -> Option<PathBuf> {
     if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
         && !config_home.is_empty()
     {
-        return Some(PathBuf::from(config_home).join("devbench/layout.conf"));
+        return Some(PathBuf::from(config_home).join("faro/layout.conf"));
     }
 
     match env::var("HOME") {
-        Ok(home) if !home.is_empty() => {
-            Some(PathBuf::from(home).join(".config/devbench/layout.conf"))
-        }
+        Ok(home) if !home.is_empty() => Some(PathBuf::from(home).join(".config/faro/layout.conf")),
         _ => None,
     }
 }

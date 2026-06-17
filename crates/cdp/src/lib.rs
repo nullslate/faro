@@ -1,15 +1,15 @@
 use base64::Engine;
-use devbench_capture::{
+use faro_capture::{
     AdapterError, BrowserEvent, ConsoleLogged, EventIngestor, RequestCompleted, RequestStarted,
     ResponseReceived, StorageChanged,
 };
-use devbench_core::{
+use faro_core::{
     ConsoleLevel, CookieEventRecord, CookieRecord, CookieSnapshotRecord, Header, RequestStatus,
     Run, RunTrigger, Session, StorageEntry, StorageSnapshotRecord, Tab, WebSocketFrameDirection,
     WebSocketFrameRecord, cookie_event_observed_event, cookie_observed_event,
     storage_snapshot_created_event, websocket_frame_event,
 };
-use devbench_store::{Store, inline_text_body};
+use faro_store::{Store, inline_text_body};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -66,7 +66,7 @@ pub enum CaptureUpdate {
 
 #[derive(Debug, thiserror::Error)]
 pub enum CdpError {
-    #[error("could not find Chromium/Chrome/Brave; set DEVBENCH_BROWSER=/path/to/browser")]
+    #[error("could not find Chromium/Chrome/Brave; set FARO_BROWSER=/path/to/browser")]
     BrowserNotFound,
     #[error("browser launch failed: {0}")]
     BrowserLaunch(std::io::Error),
@@ -79,9 +79,9 @@ pub enum CdpError {
     #[error("websocket error: {0}")]
     WebSocket(Box<tokio_tungstenite::tungstenite::Error>),
     #[error("store error: {0}")]
-    Store(#[from] devbench_store::StoreError),
+    Store(#[from] faro_store::StoreError),
     #[error("capture error: {0}")]
-    Capture(#[from] devbench_capture::AdapterError),
+    Capture(#[from] faro_capture::AdapterError),
 }
 
 pub type Result<T> = std::result::Result<T, CdpError>;
@@ -136,8 +136,8 @@ impl BrowserController {
         let child = Command::new(&browser)
             .arg(port_arg)
             .arg(format!("--user-data-dir={}", profile_dir.display()))
-            .arg("--class=devbench-browser")
-            .arg("--name=devbench-browser")
+            .arg("--class=faro-browser")
+            .arg("--name=faro-browser")
             .arg("--new-window")
             .arg("--no-first-run")
             .arg("--no-default-browser-check")
@@ -440,7 +440,7 @@ pub async fn capture_url(
         &mut ws,
         &mut next_id,
         "Runtime.addBinding",
-        json!({ "name": "devbenchCookieMutation" }),
+        json!({ "name": "faroCookieMutation" }),
     )
     .await?;
     send_command(
@@ -955,7 +955,7 @@ fn parse_cookie_binding_called(
     run: &Run,
     params: &Value,
 ) -> Option<CookieEventRecord> {
-    if params.get("name").and_then(Value::as_str)? != "devbenchCookieMutation" {
+    if params.get("name").and_then(Value::as_str)? != "faroCookieMutation" {
         return None;
     }
     let payload = params.get("payload").and_then(Value::as_str)?;
@@ -1061,8 +1061,8 @@ fn persist_cookie_event(store: &Store, event: CookieEventRecord) -> Result<()> {
 fn cookie_agent_script() -> &'static str {
     r#"
 (() => {
-  if (window.__devbenchCookieAgentInstalled) return;
-  window.__devbenchCookieAgentInstalled = true;
+  if (window.__faroCookieAgentInstalled) return;
+  window.__faroCookieAgentInstalled = true;
   const descriptor =
     Object.getOwnPropertyDescriptor(Document.prototype, "cookie") ||
     Object.getOwnPropertyDescriptor(HTMLDocument.prototype, "cookie");
@@ -1075,7 +1075,7 @@ fn cookie_agent_script() -> &'static str {
     },
     set(value) {
       try {
-        window.devbenchCookieMutation(JSON.stringify({
+        window.faroCookieMutation(JSON.stringify({
           cookie: String(value),
           href: location.href,
           origin: location.origin,
@@ -1425,7 +1425,8 @@ struct PendingStorage {
 }
 
 fn find_browser_binary() -> Option<PathBuf> {
-    env::var_os("DEVBENCH_BROWSER")
+    env::var_os("FARO_BROWSER")
+        .or_else(|| env::var_os("DEVBENCH_BROWSER"))
         .map(PathBuf::from)
         .filter(|path| path.exists())
         .or_else(|| {
@@ -1453,14 +1454,14 @@ fn default_profile_dir() -> PathBuf {
     if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
         && !config_home.is_empty()
     {
-        return PathBuf::from(config_home).join("devbench/browser-profile");
+        return PathBuf::from(config_home).join("faro/browser-profile");
     }
     if let Ok(home) = env::var("HOME")
         && !home.is_empty()
     {
-        return PathBuf::from(home).join(".config/devbench/browser-profile");
+        return PathBuf::from(home).join(".config/faro/browser-profile");
     }
-    env::temp_dir().join("devbench-browser-profile")
+    env::temp_dir().join("faro-browser-profile")
 }
 
 fn wait_for_devtools_http(port: u16) -> Result<()> {

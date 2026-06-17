@@ -1,14 +1,14 @@
-# Devbench
+# Faro
 
-Devbench is a terminal-first browser debugging workbench for frontend and full-stack development.
+Faro is a terminal-first browser debugging workbench for frontend and full-stack development.
 
 It launches or attaches to a Chromium-family browser through the Chrome DevTools Protocol, captures browser observations into SQLite, and lets humans and agents inspect the result through a TUI, CLI, SQL, or MCP.
 
 ```text
-Browser -> Chrome DevTools Protocol -> Devbench capture -> SQLite -> TUI / CLI / MCP
+Browser -> Chrome DevTools Protocol -> Faro capture -> SQLite -> TUI / CLI / MCP
 ```
 
-Devbench does not embed Chromium and does not render web pages in the terminal. It controls a real browser and keeps a durable local debugging database.
+Faro does not embed Chromium and does not render web pages in the terminal. It controls a real browser and keeps a durable local debugging database.
 
 ## Features
 
@@ -21,7 +21,7 @@ Devbench does not embed Chromium and does not render web pages in the terminal. 
 - Replay captured requests with `curl` and persist replay status/body metadata.
 - Read-only SQL editor in the TUI, plus CLI/MCP read-only SQL for agents.
 - Agent-friendly CLI and MCP server for capture, inspection, replay, and SQL.
-- TOML config in `~/.config/devbench/config.toml` or `$XDG_CONFIG_HOME/devbench/config.toml`.
+- TOML config in `~/.config/faro/config.toml` or `$XDG_CONFIG_HOME/faro/config.toml`.
 
 ## Quick Start
 
@@ -35,27 +35,27 @@ Prerequisites:
 - Optional: `nvim` or another `$EDITOR` for body editing, SQL, and console evaluation.
 
 ```sh
-git clone <repo-url> devbench
-cd devbench
+git clone <repo-url> faro
+cd faro
 cargo install --path crates/app
 ```
 
 Run the TUI against a local app:
 
 ```sh
-devbench http://localhost:5173
+faro http://localhost:5173
 ```
 
 Press `o` to launch the browser and start capture. Use eager launch when you want capture to start immediately:
 
 ```sh
-devbench --launch-on-start http://localhost:5173
+faro --launch-on-start http://localhost:5173
 ```
 
 Open a previously captured database without launching a browser:
 
 ```sh
-devbench tui ~/.config/devbench/devbench.db
+faro tui ~/.config/faro/faro.db
 ```
 
 ### Run Without Installing
@@ -68,15 +68,15 @@ cargo run -- --launch-on-start http://localhost:5173
 ### Attach To An Existing Browser
 
 ```sh
-chromium --remote-debugging-port=9222 --user-data-dir=/tmp/devbench-profile
-devbench --attach-port 9222 http://localhost:5173
+chromium --remote-debugging-port=9222 --user-data-dir=/tmp/faro-profile
+faro --attach-port 9222 http://localhost:5173
 ```
 
-Use `DEVBENCH_BROWSER=/path/to/chrome-or-chromium` to override browser discovery.
+Use `FARO_BROWSER=/path/to/chrome-or-chromium` to override browser discovery.
 
 ### Editor Handoff
 
-Devbench opens `$EDITOR` for SQL, console evaluation, body viewing/editing, storage edits, cookie edits, and replay editing. Terminal editors usually work as-is:
+Faro opens `$EDITOR` for SQL, console evaluation, body viewing/editing, storage edits, cookie edits, and replay editing. Terminal editors usually work as-is:
 
 ```sh
 export EDITOR=nvim
@@ -89,7 +89,7 @@ export EDITOR="code --wait"
 export EDITOR="zed --wait"
 ```
 
-Without a wait flag, GUI editors may return immediately and Devbench will resume before the file is saved.
+Without a wait flag, GUI editors may return immediately and Faro will resume before the file is saved.
 
 ## TUI Basics
 
@@ -149,35 +149,35 @@ Quick presets include all, errors, JSON, fetch, XHR, SSE, images, scripts, style
 
 ## CLI
 
-The CLI is designed for humans and agents that want to inspect Devbench without opening the TUI.
+The CLI is designed for humans and agents that want to inspect Faro without opening the TUI.
 
 Capture a page without the TUI:
 
 ```sh
-devbench capture https://example.com --for 15s --json
+faro capture https://example.com --for 15s --json
 ```
 
 Inspect captured requests:
 
 ```sh
-devbench requests --route /api --filter "status >= 400" --json
-devbench request get <request-id> --body --json
-devbench request curl <request-id>
+faro requests --route /api --filter "status >= 400" --json
+faro request get <request-id> --body --json
+faro request curl <request-id>
 ```
 
 Inspect browser state:
 
 ```sh
-devbench console errors --json
-devbench storage get localStorage auth --json
-devbench cookies list --json
+faro console errors --json
+faro storage get localStorage auth --json
+faro cookies list --json
 ```
 
 Replay and query:
 
 ```sh
-devbench replay <request-id> --json
-devbench sql "select * from requests where status_code >= 500" --json
+faro replay <request-id> --json
+faro sql "select * from requests where status_code >= 500" --json
 ```
 
 Route filters accept:
@@ -190,10 +190,10 @@ Use `--db <path>` with any command to target a specific SQLite database.
 
 ## MCP And Agent Integration
 
-Devbench includes a stdio MCP server:
+Faro includes a stdio MCP server:
 
 ```sh
-devbench mcp
+faro mcp
 ```
 
 Example MCP config:
@@ -201,8 +201,8 @@ Example MCP config:
 ```json
 {
   "mcpServers": {
-    "devbench": {
-      "command": "devbench",
+    "faro": {
+      "command": "faro",
       "args": ["mcp"]
     }
   }
@@ -214,9 +214,9 @@ Use a specific database:
 ```json
 {
   "mcpServers": {
-    "devbench": {
-      "command": "devbench",
-      "args": ["--db", "/path/to/devbench.db", "mcp"]
+    "faro": {
+      "command": "faro",
+      "args": ["--db", "/path/to/faro.db", "mcp"]
     }
   }
 }
@@ -238,7 +238,7 @@ Available MCP tools:
 The importable agent package lives in:
 
 ```text
-agents/devbench/
+agents/faro/
 ```
 
 It contains:
@@ -248,29 +248,29 @@ It contains:
 
 ## Configuration
 
-On first run, Devbench creates:
+On first run, Faro creates:
 
 ```text
-$XDG_CONFIG_HOME/devbench/config.toml
+$XDG_CONFIG_HOME/faro/config.toml
 ```
 
 or:
 
 ```text
-~/.config/devbench/config.toml
+~/.config/faro/config.toml
 ```
 
-The default database path is `devbench.db` relative to the config directory, so the default DB is usually:
+The default database path is `faro.db` relative to the config directory, so the default DB is usually:
 
 ```text
-~/.config/devbench/devbench.db
+~/.config/faro/faro.db
 ```
 
 Important config fields:
 
 ```toml
 [app]
-db_path = "devbench.db"
+db_path = "faro.db"
 launch_on_start = false
 
 [ui]
@@ -291,11 +291,11 @@ The default theme is Gruvbox-inspired and can be customized with hex colors or s
 
 Workspace crates:
 
-- `devbench-core`: domain models and event types.
-- `devbench-store`: SQLite event store, projections, and read-only SQL guardrails.
-- `devbench-capture`: source-neutral ingestion pipeline.
-- `devbench-cdp`: Chrome DevTools Protocol capture/control plane.
-- `devbench`: CLI, TUI, and MCP entrypoint.
+- `faro-core`: domain models and event types.
+- `faro-store`: SQLite event store, projections, and read-only SQL guardrails.
+- `faro-capture`: source-neutral ingestion pipeline.
+- `faro-cdp`: Chrome DevTools Protocol capture/control plane.
+- `faro`: CLI, TUI, and MCP entrypoint.
 
 Captured data is persisted in SQLite so the TUI, CLI, SQL, and MCP all inspect the same source of truth.
 
@@ -315,12 +315,12 @@ Run locally:
 ```sh
 cargo run -- http://localhost:5173
 cargo run -- capture http://localhost:5173 --for 10s --json
-cargo run -- --db /tmp/devbench.db mcp
+cargo run -- --db /tmp/faro.db mcp
 ```
 
 ## Current Limitations
 
-- Devbench currently targets Chromium-family browsers through CDP.
+- Faro currently targets Chromium-family browsers through CDP.
 - Response body capture is bounded to avoid unbounded database growth.
 - Storage mutation tracking is CDP DOMStorage-based; snapshots are used for baseline and reconciliation.
 - Cookie mutation tracking uses HTTP `Set-Cookie` observation plus a page-side `document.cookie` observer.

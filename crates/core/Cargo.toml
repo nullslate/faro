@@ -1,5 +1,5 @@
 [package]
-name = "devbench-core"
+name = "faro-core"
 version = "0.1.0"
 edition.workspace = true
 

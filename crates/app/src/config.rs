@@ -5,12 +5,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const DEFAULT_CONFIG: &str = r##"# Devbench configuration.
+const DEFAULT_CONFIG: &str = r##"# Faro configuration.
 
 [app]
 # Default database path used when --db is omitted. Relative paths resolve
 # from this config file's directory.
-db_path = "devbench.db"
+db_path = "faro.db"
 # Start capture immediately for URL launches instead of waiting for "o".
 launch_on_start = false
 
@@ -41,11 +41,11 @@ resource_style = "#89b482"
 resource_sse = "#a9b665"
 "##;
 
-const LEGACY_NEON_DEFAULT_CONFIG: &str = r##"# Devbench configuration.
+const LEGACY_NEON_DEFAULT_CONFIG: &str = r##"# Faro configuration.
 
 [app]
 # Default database path used when --db is omitted.
-db_path = "devbench.db"
+db_path = "faro.db"
 # Start capture immediately for URL launches instead of waiting for "o".
 launch_on_start = false
 
@@ -76,11 +76,11 @@ resource_style = "#29b8db"
 resource_sse = "#23d18b"
 "##;
 
-const LEGACY_GRUVBOX_DEFAULT_CONFIG: &str = r##"# Devbench configuration.
+const LEGACY_GRUVBOX_DEFAULT_CONFIG: &str = r##"# Faro configuration.
 
 [app]
 # Default database path used when --db is omitted.
-db_path = "devbench.db"
+db_path = "faro.db"
 # Start capture immediately for URL launches instead of waiting for "o".
 launch_on_start = false
 
@@ -111,11 +111,11 @@ resource_style = "#8ec07c"
 resource_sse = "#b8bb26"
 "##;
 
-const LEGACY_TERMINAL_DEFAULT_CONFIG: &str = r##"# Devbench configuration.
+const LEGACY_TERMINAL_DEFAULT_CONFIG: &str = r##"# Faro configuration.
 
 [app]
 # Default database path used when --db is omitted.
-db_path = "devbench.db"
+db_path = "faro.db"
 # Start capture immediately for URL launches instead of waiting for "o".
 launch_on_start = false
 
@@ -146,11 +146,11 @@ resource_style = "cyan"
 resource_sse = "green"
 "##;
 
-const LEGACY_NEUTRAL_DEFAULT_CONFIG: &str = r##"# Devbench configuration.
+const LEGACY_NEUTRAL_DEFAULT_CONFIG: &str = r##"# Faro configuration.
 
 [app]
 # Default database path used when --db is omitted.
-db_path = "devbench.db"
+db_path = "faro.db"
 # Start capture immediately for URL launches instead of waiting for "o".
 launch_on_start = false
 
@@ -192,7 +192,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            db_path: PathBuf::from("devbench.db"),
+            db_path: PathBuf::from("faro.db"),
             launch_on_start: false,
             ui: UiConfig::default(),
             theme: Theme::default(),
@@ -342,15 +342,28 @@ fn load_from_path(path: &Path) -> anyhow::Result<AppConfig> {
 }
 
 fn config_path() -> Option<PathBuf> {
+    let primary = config_path_for("faro");
+    let legacy = config_path_for("devbench");
+    match (primary, legacy) {
+        (Some(primary), Some(legacy)) if !primary.exists() && legacy.exists() => Some(legacy),
+        (Some(primary), _) => Some(primary),
+        (None, legacy) => legacy,
+    }
+}
+
+fn config_path_for(app_dir: &str) -> Option<PathBuf> {
     if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
         && !config_home.is_empty()
     {
-        return Some(PathBuf::from(config_home).join("devbench/config.toml"));
+        return Some(PathBuf::from(config_home).join(app_dir).join("config.toml"));
     }
     match env::var("HOME") {
-        Ok(home) if !home.is_empty() => {
-            Some(PathBuf::from(home).join(".config/devbench/config.toml"))
-        }
+        Ok(home) if !home.is_empty() => Some(
+            PathBuf::from(home)
+                .join(".config")
+                .join(app_dir)
+                .join("config.toml"),
+        ),
         _ => None,
     }
 }

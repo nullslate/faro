@@ -1,4 +1,4 @@
-use devbench_core::{
+use faro_core::{
     BodyRecord, ConsoleLevel, ConsoleLog, CookieEventRecord, CookieSnapshotRecord, EventEnvelope,
     Header, Id, ReplayRecord, RequestRecord, RequestStatus, ResponseRecord, Run, Session,
     StorageEventRecord, StorageSnapshotRecord, Tab, WebSocketFrameDirection, WebSocketFrameRecord,
@@ -1098,11 +1098,11 @@ fn parse_request_status(status: &str) -> RequestStatus {
     }
 }
 
-fn parse_run_trigger(trigger: &str) -> devbench_core::RunTrigger {
+fn parse_run_trigger(trigger: &str) -> faro_core::RunTrigger {
     match trigger {
-        "reload" => devbench_core::RunTrigger::Reload,
-        "navigation" => devbench_core::RunTrigger::Navigation,
-        _ => devbench_core::RunTrigger::InitialLoad,
+        "reload" => faro_core::RunTrigger::Reload,
+        "navigation" => faro_core::RunTrigger::Navigation,
+        _ => faro_core::RunTrigger::InitialLoad,
     }
 }
 
@@ -1300,7 +1300,7 @@ CREATE INDEX IF NOT EXISTS idx_websocket_frames_request_ts ON websocket_frames(b
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devbench_core::{
+    use faro_core::{
         CookieEventRecord, CookieRecord, CookieSnapshotRecord, ReplayRecord, RunTrigger,
         StorageEntry, StorageSnapshotRecord, WebSocketFrameDirection, WebSocketFrameRecord,
         console_event, cookie_event_observed_event, cookie_observed_event, request_completed_event,
@@ -1390,7 +1390,7 @@ mod tests {
             &response,
         ))?;
 
-        request.completed_at = Some(devbench_core::now_ms());
+        request.completed_at = Some(faro_core::now_ms());
         request.status = RequestStatus::Complete;
         store.complete_request(&request)?;
         store.append_event(&request_completed_event(&request))?;
@@ -1554,7 +1554,7 @@ mod tests {
     #[test]
     fn executes_readonly_sql_query() -> TestResult {
         let db_path =
-            std::env::temp_dir().join(format!("devbench-query-test-{}.db", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("faro-query-test-{}.db", uuid::Uuid::new_v4()));
         let session = Session::new(None, Some("https://example.test".to_string()));
         {
             let store = Store::open(&db_path)?;

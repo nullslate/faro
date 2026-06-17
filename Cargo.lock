@@ -198,75 +198,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
-name = "devbench"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossterm",
- "devbench-capture",
- "devbench-cdp",
- "devbench-core",
- "devbench-store",
- "ratatui",
- "regex",
- "serde",
- "serde_json",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "devbench-capture"
-version = "0.1.0"
-dependencies = [
- "devbench-core",
- "devbench-store",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "devbench-cdp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "devbench-capture",
- "devbench-core",
- "devbench-store",
- "futures-util",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
-]
-
-[[package]]
-name = "devbench-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "devbench-store"
-version = "0.1.0"
-dependencies = [
- "devbench-core",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "uuid",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -309,6 +240,75 @@ name = "fallible-streaming-iterator"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
+name = "faro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "faro-capture",
+ "faro-cdp",
+ "faro-core",
+ "faro-store",
+ "ratatui",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "faro-capture"
+version = "0.1.0"
+dependencies = [
+ "faro-core",
+ "faro-store",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "faro-cdp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "faro-capture",
+ "faro-core",
+ "faro-store",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
+]
+
+[[package]]
+name = "faro-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "faro-store"
+version = "0.1.0"
+dependencies = [
+ "faro-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "uuid",
+]
 
 [[package]]
 name = "find-msvc-tools"

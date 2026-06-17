@@ -1,11 +1,11 @@
 use crate::config::AppConfig;
 use anyhow::Context;
-use devbench_core::{
+use faro_core::{
     ConsoleLevel, ConsoleLog, CookieEventRecord, CookieSnapshotRecord, ReplayRecord, RequestRecord,
     ResponseRecord, Session, StorageEventRecord, StorageSnapshotRecord, UnixMillis,
     WebSocketFrameRecord, now_ms,
 };
-use devbench_store::Store;
+use faro_store::Store;
 use ratatui::widgets::{ListState, TableState};
 use regex::{Regex, RegexBuilder};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -2088,8 +2088,8 @@ pub(crate) struct CurrentCookieEntry {
 }
 
 impl CurrentCookieEntry {
-    pub(crate) fn to_cookie_record(&self) -> devbench_core::CookieRecord {
-        devbench_core::CookieRecord {
+    pub(crate) fn to_cookie_record(&self) -> faro_core::CookieRecord {
+        faro_core::CookieRecord {
             name: self.name.clone(),
             value: self.value.clone(),
             domain: self.domain.clone(),
@@ -2258,7 +2258,7 @@ impl ConsoleFilter {
         }
 
         if let Some(kind) = &self.kind {
-            let is_eval = log.source.as_deref() == Some("devbench-console");
+            let is_eval = log.source.as_deref() == Some("faro-console");
             match kind.as_str() {
                 "eval" if !is_eval => return false,
                 "page" if is_eval => return false,
@@ -3230,7 +3230,7 @@ fn extension_for_mime(mime: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devbench_core::Header;
+    use faro_core::Header;
 
     type TestResult = anyhow::Result<()>;
 
@@ -3331,8 +3331,8 @@ mod tests {
     fn console_filter_matches_level_source_kind_and_text() {
         let eval_log = console_log(
             ConsoleLevel::Info,
-            "> document.title\n\"Devbench\"",
-            Some("devbench-console"),
+            "> document.title\n\"Faro\"",
+            Some("faro-console"),
         );
         let error_log = console_log(
             ConsoleLevel::Error,
@@ -3340,9 +3340,9 @@ mod tests {
             Some("runtime"),
         );
 
-        assert!(ConsoleFilter::parse("eval devbench").matches(&eval_log));
-        assert!(ConsoleFilter::parse("/devbench|runtime/").matches(&eval_log));
-        assert!(ConsoleFilter::parse("kind:eval source:devbench").matches(&eval_log));
+        assert!(ConsoleFilter::parse("eval faro").matches(&eval_log));
+        assert!(ConsoleFilter::parse("/faro|runtime/").matches(&eval_log));
+        assert!(ConsoleFilter::parse("kind:eval source:faro").matches(&eval_log));
         assert!(ConsoleFilter::parse("level:error token").matches(&error_log));
         assert!(!ConsoleFilter::parse("level:warn").matches(&error_log));
         assert!(!ConsoleFilter::parse("kind:page").matches(&eval_log));

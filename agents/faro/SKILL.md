@@ -1,16 +1,16 @@
-# Devbench Browser Debugging
+# Faro Browser Debugging
 
-Use Devbench when you need to capture, inspect, replay, or query browser debugging data for a web app.
+Use Faro when you need to capture, inspect, replay, or query browser debugging data for a web app.
 
 ## MCP Setup
 
-Start the Devbench MCP server over stdio:
+Start the Faro MCP server over stdio:
 
 ```json
 {
   "mcpServers": {
-    "devbench": {
-      "command": "devbench",
+    "faro": {
+      "command": "faro",
       "args": ["mcp"]
     }
   }
@@ -22,9 +22,9 @@ Use a specific database if needed:
 ```json
 {
   "mcpServers": {
-    "devbench": {
-      "command": "devbench",
-      "args": ["--db", "/path/to/devbench.db", "mcp"]
+    "faro": {
+      "command": "faro",
+      "args": ["--db", "/path/to/faro.db", "mcp"]
     }
   }
 }
@@ -77,15 +77,15 @@ run_readonly_sql({ "query": "select id, method, url, status_code from requests w
 If MCP is unavailable, use the CLI:
 
 ```bash
-devbench capture https://example.com --for 15s --json
-devbench requests --route /api --filter "status >= 400" --json
-devbench request get <request-id> --body --json
-devbench request curl <request-id>
-devbench console errors --json
-devbench storage get localStorage auth --json
-devbench cookies list --json
-devbench replay <request-id> --json
-devbench sql "select * from requests where status_code >= 500" --json
+faro capture https://example.com --for 15s --json
+faro requests --route /api --filter "status >= 400" --json
+faro request get <request-id> --body --json
+faro request curl <request-id>
+faro console errors --json
+faro storage get localStorage auth --json
+faro cookies list --json
+faro replay <request-id> --json
+faro sql "select * from requests where status_code >= 500" --json
 ```
 
 ## Notes
@@ -93,4 +93,4 @@ devbench sql "select * from requests where status_code >= 500" --json
 - Route filters accept plain prefixes like `/api/users`, one-segment params like `/api/users/:id`, and wildcards like `/api/*`.
 - Prefer `copy_request_as_curl` when sharing a reproduction with a human.
 - Prefer `replay_request` only when the user explicitly wants to send the request again.
-- Do not run mutating SQL. Devbench rejects writes, but tools should still ask for read-only queries.
+- Do not run mutating SQL. Faro rejects writes, but tools should still ask for read-only queries.

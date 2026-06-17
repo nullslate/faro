@@ -7,7 +7,7 @@ use super::state::{
     formatted_request_body, formatted_response_body, path_for_url, websocket_opcode_label,
 };
 use crate::config::Theme;
-use devbench_core::{ConsoleLevel, ConsoleLog, WebSocketFrameDirection, WebSocketFrameRecord};
+use faro_core::{ConsoleLevel, ConsoleLog, WebSocketFrameDirection, WebSocketFrameRecord};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -208,7 +208,7 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         .split(area);
     let mut title_spans = vec![
         Span::styled(
-            " devbench ",
+            " faro ",
             Style::default()
                 .fg(GB_GREEN)
                 .bg(Color::Black)
@@ -778,7 +778,7 @@ fn console_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
     let evals = app
         .console_logs
         .iter()
-        .filter(|log| log.source.as_deref() == Some("devbench-console"))
+        .filter(|log| log.source.as_deref() == Some("faro-console"))
         .count();
 
     vec![
@@ -2086,7 +2086,7 @@ fn console_eval_lines(log: &ConsoleLog) -> Option<Vec<Line<'static>>> {
 
     let mut lines = vec![Line::from(vec![
         Span::styled("eval   ", console_style(&log.level)),
-        Span::styled(" devbench-console", muted_style()),
+        Span::styled(" faro-console", muted_style()),
     ])];
 
     for (index, line) in expression.lines().enumerate() {
@@ -2113,7 +2113,7 @@ fn console_eval_lines(log: &ConsoleLog) -> Option<Vec<Line<'static>>> {
 }
 
 fn console_eval_parts(log: &ConsoleLog) -> Option<(&str, &str)> {
-    if log.source.as_deref() != Some("devbench-console") || !log.message.starts_with("> ") {
+    if log.source.as_deref() != Some("faro-console") || !log.message.starts_with("> ") {
         return None;
     }
 
@@ -3109,7 +3109,7 @@ mod tests {
     use super::*;
     use crate::config::AppConfig;
     use crate::tui::state::{InputMode, SortMode};
-    use devbench_core::{
+    use faro_core::{
         CookieEventRecord, CookieRecord, CookieSnapshotRecord, StorageEntry, StorageEventRecord,
         StorageSnapshotRecord,
     };
@@ -3122,7 +3122,7 @@ mod tests {
     ) -> WorkbenchState {
         WorkbenchState {
             config: AppConfig::default(),
-            db_path: PathBuf::from("/tmp/devbench-test.db"),
+            db_path: PathBuf::from("/tmp/faro-test.db"),
             target_url: "http://localhost:5173".to_string(),
             active_session_id: None,
             requests: Vec::new(),
@@ -3343,7 +3343,7 @@ mod tests {
     #[test]
     fn syntax_body_lines_highlights_json() -> anyhow::Result<()> {
         let lines = syntax_body_lines(serde_json::to_string_pretty(&serde_json::json!({
-            "name": "devbench",
+            "name": "faro",
             "count": 3,
             "ok": true,
             "empty": null
@@ -3354,11 +3354,7 @@ mod tests {
             .flat_map(|line| line.spans.iter())
             .collect::<Vec<_>>();
         assert!(spans.iter().any(|span| span.content.as_ref() == "\"name\""));
-        assert!(
-            spans
-                .iter()
-                .any(|span| span.content.as_ref() == "\"devbench\"")
-        );
+        assert!(spans.iter().any(|span| span.content.as_ref() == "\"faro\""));
         assert!(spans.iter().any(|span| span.content.as_ref() == "3"));
         assert!(spans.iter().any(|span| span.content.as_ref() == "true"));
         assert!(spans.iter().any(|span| span.content.as_ref() == "null"));
@@ -3395,7 +3391,7 @@ mod tests {
             None,
             ConsoleLevel::Info,
             "> const value = await fetch('/api')\n{\"ok\":true}".to_string(),
-            Some("devbench-console".to_string()),
+            Some("faro-console".to_string()),
             None,
         );
 
@@ -3922,7 +3918,7 @@ fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
     lines
 }
 
-fn header_lines(title: &'static str, headers: &[devbench_core::Header]) -> Vec<Line<'static>> {
+fn header_lines(title: &'static str, headers: &[faro_core::Header]) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled(title, label_style()), Line::raw("")];
     if headers.is_empty() {
         lines.push(Line::raw("(none)"));
