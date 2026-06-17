@@ -3617,4 +3617,28 @@ mod tests {
         assert_eq!(state.request_open_route_child_count(1), Some((false, 2)));
         Ok(())
     }
+
+    #[test]
+    fn request_open_route_marks_filtered_siblings_as_drillable() -> TestResult {
+        let mut first = request_view();
+        first.request.url = "http://localhost:5173/gamma/api/v1/organizations/123".to_string();
+        let mut second = request_view();
+        second.request.url = "http://localhost:5173/gamma/api/v1/organizations/456".to_string();
+        let requests = vec![first, second];
+        let metas = build_request_tree_metas(&requests);
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.requests = requests;
+        state.request_tree_metas = metas;
+        state.filtered_request_indices = vec![0, 1];
+
+        assert!(state.request_open_route_child_count(0).is_some());
+        assert!(state.request_open_route_child_count(1).is_some());
+        Ok(())
+    }
 }

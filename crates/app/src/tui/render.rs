@@ -563,7 +563,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                     .clone()
                     .unwrap_or_else(|| "-".to_string());
                 let tree_meta = app.request_tree_meta(*index);
-                let _route_context = app.request_open_route_child_count(*index);
+                let can_open_route = app.request_open_route_child_count(*index).is_some();
                 let domain = domain_for_url(&request.request.url);
                 let path = app
                     .request_route_remainder(*index)
@@ -582,6 +582,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                         row_index,
                         total,
                         tree_meta.as_ref(),
+                        can_open_route,
                         fade,
                         theme,
                     )),
@@ -2430,6 +2431,7 @@ fn request_tree_marker(
     row_index: usize,
     total: usize,
     meta: Option<&RequestTreeMeta>,
+    can_open_route: bool,
     fade: RowFade,
     theme: &Theme,
 ) -> Line<'static> {
@@ -2438,7 +2440,7 @@ fn request_tree_marker(
     let indent = meta
         .map(|meta| "  ".repeat(meta.depth.saturating_sub(1).min(6)))
         .unwrap_or_default();
-    let row_has_children = meta.map(|meta| meta.has_children).unwrap_or(false);
+    let row_has_children = can_open_route || meta.map(|meta| meta.has_children).unwrap_or(false);
     let dot = if row_has_children { "●" } else { " " };
     let dot_style = if row_has_children {
         fade.accent_style(theme.active_border)
@@ -3910,12 +3912,17 @@ mod tests {
             ..parent.clone()
         };
 
-        let parent_text = request_tree_marker(0, 2, Some(&parent), RowFade::Full, &theme)
+        let parent_text = request_tree_marker(0, 2, Some(&parent), false, RowFade::Full, &theme)
             .spans
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        let leaf_text = request_tree_marker(1, 2, Some(&leaf), RowFade::Full, &theme)
+        let leaf_text = request_tree_marker(1, 2, Some(&leaf), false, RowFade::Full, &theme)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let drillable_text = request_tree_marker(1, 2, Some(&leaf), true, RowFade::Full, &theme)
             .spans
             .iter()
             .map(|span| span.content.as_ref())
@@ -3923,6 +3930,7 @@ mod tests {
 
         assert_eq!(parent_text, "├─●");
         assert_eq!(leaf_text, "└─ ");
+        assert_eq!(drillable_text, "└─●");
     }
 
     #[test]
