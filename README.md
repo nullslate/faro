@@ -192,7 +192,7 @@ Use `--db <path>` with any command to target a specific SQLite database.
 
 ## MCP And Agent Integration
 
-Faro includes a stdio MCP server:
+Faro includes a stdio MCP server so coding agents can inspect the same browser capture database that the TUI and CLI use. The server is DB-first: tools read from SQLite, replay captured requests, and can start short capture sessions, but they do not scrape the terminal UI.
 
 ```sh
 faro mcp
@@ -211,7 +211,7 @@ Example MCP config:
 }
 ```
 
-Use a specific database:
+Most users should point their agent at the default config database. Use an explicit database when you want a project-specific capture or a disposable debugging session:
 
 ```json
 {
@@ -224,18 +224,54 @@ Use a specific database:
 }
 ```
 
-Available MCP tools:
+### Typical Agent Workflow
 
-- `capture_url`
-- `list_requests`
-- `get_request`
-- `get_response_body`
-- `list_console_errors`
-- `get_storage_item`
-- `list_cookies`
-- `copy_request_as_curl`
-- `replay_request`
-- `run_readonly_sql`
+1. Start Faro normally while reproducing the issue, or let the agent run `capture_url`.
+2. Ask the agent to list failing or slow requests with `list_requests`.
+3. Have it inspect a request with `get_request` and `get_response_body`.
+4. Let it check console failures with `list_console_errors`.
+5. Use `copy_request_as_curl` or `replay_request` when the bug needs a reproducible backend call.
+6. Use `run_readonly_sql` for deeper analysis across the capture database.
+
+Useful prompts:
+
+```text
+Use Faro to find failed network requests from the latest capture. Inspect the response bodies and summarize the likely backend or frontend issue.
+```
+
+```text
+Use Faro to inspect requests under /api during the latest session. Find slow calls, replay the most suspicious request if safe, and show me the curl command.
+```
+
+```text
+Use Faro read-only SQL to group captured requests by domain and status code. Highlight third-party failures and any unusually large responses.
+```
+
+### MCP Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `capture_url` | Launch or attach to Chromium and capture a URL for a bounded duration. |
+| `list_requests` | List captured requests, with route/filter support for narrowing results. |
+| `get_request` | Fetch request metadata, headers, response metadata, and body references. |
+| `get_response_body` | Load a captured response body by request id. |
+| `list_console_errors` | Return captured browser console errors. |
+| `get_storage_item` | Read a current localStorage or sessionStorage item. |
+| `list_cookies` | List current captured cookies. |
+| `copy_request_as_curl` | Return a full `curl` command for a captured request. |
+| `replay_request` | Replay a captured request and persist replay metadata. |
+| `run_readonly_sql` | Run guarded read-only SQL against the Faro SQLite database. |
+
+The same workflows are available from the CLI when an agent cannot use MCP:
+
+```sh
+faro capture https://example.com --for 15s --json
+faro requests --filter "status >= 400" --json
+faro request get <request-id> --body --json
+faro request curl <request-id>
+faro console errors --json
+faro sql "select status_code, count(*) from requests group by status_code" --json
+```
 
 The importable agent package lives in:
 
