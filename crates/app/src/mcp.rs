@@ -1,11 +1,11 @@
-use crate::{
-    CaptureOptions, CliOptions, CliReplayResult, build_curl_args, build_curl_argv,
-    build_curl_command, current_storage_items, find_request_with_response, latest_cookies,
-    latest_session, load_body, load_body_text, open_store, parse_duration, request_matches_filter,
-    request_matches_route, request_rows_for_session,
+use crate::cli::{
+    CliOptions, CliReplayResult, build_curl_args, build_curl_argv, build_curl_command,
+    current_storage_items, find_request_with_response, latest_cookies, latest_session, load_body,
+    load_body_text, open_store, parse_duration, request_matches_filter, request_matches_route,
+    request_rows_for_session,
 };
 use anyhow::{Context, bail};
-use faro_cdp::CaptureUpdate;
+use faro_cdp::{CaptureOptions, CaptureUpdate};
 use faro_core::{ReplayRecord, request_replayed_event};
 use faro_store::inline_text_body;
 use serde_json::{Map, Value, json};
