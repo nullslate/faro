@@ -3306,7 +3306,7 @@ fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         if !app.body_tree_items().is_empty() {
             return body_tree_lines(app);
         }
-        return syntax_body_lines_for_request(request, formatted_response_body(request));
+        return response_body_content_lines(request, app.focus == FocusPane::Body);
     }
 
     let mut lines = vec![
@@ -3753,6 +3753,26 @@ mod tests {
     }
 
     #[test]
+    fn response_body_syntax_only_applies_when_active() {
+        let request = response_request("text/css", "stylesheet", "https://example.test/app.css");
+        let body = ".shell { color: #d4be98; }";
+        let mut active_request = request;
+        active_request.response_body = Some(body.to_string());
+
+        let active = response_body_content_lines(&active_request, true);
+        let inactive = response_body_content_lines(&active_request, false);
+
+        assert!(
+            active[0]
+                .spans
+                .iter()
+                .any(|span| span.content.as_ref() == "color")
+        );
+        assert_eq!(inactive[0].spans.len(), 1);
+        assert_eq!(inactive[0].spans[0].content.as_ref(), body);
+    }
+
+    #[test]
     fn parse_sse_events_groups_fields() {
         let events = parse_sse_events(
             "id: 1\nevent: patch\ndata: {\"ok\":true}\n\nretry: 5000\ndata: heartbeat\n\n",
@@ -3842,7 +3862,7 @@ fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         DetailTab::ResponseBody if is_image_request(request) => image_preview_lines(request),
         DetailTab::ResponseBody if is_sse_request(request) => sse_body_lines(request),
         DetailTab::ResponseBody if !app.body_tree_items().is_empty() => body_tree_lines(app),
-        DetailTab::ResponseBody => response_body_lines(request),
+        DetailTab::ResponseBody => response_body_lines(request, app.focus == FocusPane::Detail),
         DetailTab::Timing => timing_lines(request),
         DetailTab::Replay => replay_lines(request),
     }
@@ -4209,13 +4229,21 @@ fn body_lines(title: &'static str, body: String) -> Vec<Line<'static>> {
     lines
 }
 
-fn response_body_lines(request: &RequestView) -> Vec<Line<'static>> {
+fn response_body_lines(request: &RequestView, active: bool) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled("response body", label_style()), Line::raw("")];
-    lines.extend(syntax_body_lines_for_request(
-        request,
-        formatted_response_body(request),
-    ));
+    lines.extend(response_body_content_lines(request, active));
     lines
+}
+
+fn response_body_content_lines(request: &RequestView, active: bool) -> Vec<Line<'static>> {
+    let body = formatted_response_body(request);
+    if active {
+        syntax_body_lines_for_request(request, body)
+    } else {
+        body.lines()
+            .map(|line| Line::styled(line.to_string(), Style::default().fg(GB_FG)))
+            .collect()
+    }
 }
 
 fn timing_lines(request: &RequestView) -> Vec<Line<'static>> {
