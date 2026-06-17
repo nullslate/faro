@@ -247,12 +247,18 @@ fn view_tabs_line(app: &WorkbenchState) -> Line<'static> {
         Span::raw(" "),
         view_tab(
             "3",
+            format!("WS {}", app.websocket_frames.len()),
+            app.view == WorkbenchView::WebSockets,
+        ),
+        Span::raw(" "),
+        view_tab(
+            "4",
             format!("Storage {}", app.storage_events.len()),
             app.view == WorkbenchView::Storage,
         ),
         Span::raw(" "),
         view_tab(
-            "4",
+            "5",
             format!("Cookies {}", cookie_count(app)),
             app.view == WorkbenchView::Cookies,
         ),
@@ -3770,6 +3776,22 @@ mod tests {
         );
         assert_eq!(inactive[0].spans.len(), 1);
         assert_eq!(inactive[0].spans[0].content.as_ref(), body);
+    }
+
+    #[test]
+    fn view_tabs_include_websockets_with_matching_shortcuts() {
+        let app = state_with_storage(Vec::new(), Vec::new());
+        let text = view_tabs_line(&app)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("1 Net"));
+        assert!(text.contains("2 Console"));
+        assert!(text.contains("3 WS"));
+        assert!(text.contains("4 Storage"));
+        assert!(text.contains("5 Cookies"));
     }
 
     #[test]
