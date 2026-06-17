@@ -1273,6 +1273,22 @@ impl WorkbenchState {
         Some(meta)
     }
 
+    pub(crate) fn request_open_route_child_count(
+        &self,
+        request_index: usize,
+    ) -> Option<(bool, usize)> {
+        let group = self.collapsible_group_key_for_request_index(request_index)?;
+        self.request_tree_metas
+            .iter()
+            .find(|meta| meta.group_key.as_deref() == Some(group.as_str()) && meta.has_children)
+            .map(|meta| {
+                (
+                    self.collapsed_request_groups.contains(&group),
+                    meta.child_count,
+                )
+            })
+    }
+
     pub(crate) fn active_expanded_request_group(&self) -> Option<String> {
         self.active_request_route_group.clone()
     }
@@ -3403,12 +3419,13 @@ mod tests {
     }
 
     #[test]
-    fn request_tree_meta_counts_descendant_children() {
+    fn request_tree_meta_counts_descendant_children() -> TestResult {
         let mut parent = request_view();
         parent.request.url = "http://localhost:5173/api/users".to_string();
         let mut child = request_view();
         child.request.url = "http://localhost:5173/api/users/123".to_string();
-        let metas = build_request_tree_metas(&[parent, child]);
+        let requests = vec![parent, child];
+        let metas = build_request_tree_metas(&requests);
 
         let Some(parent_meta) = metas.first() else {
             panic!("missing parent meta");
@@ -3421,5 +3438,19 @@ mod tests {
         assert_eq!(parent_meta.child_count, 1);
         assert!(!child_meta.has_children);
         assert_eq!(child_meta.child_count, 0);
+
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.requests = requests;
+        state.request_tree_metas = metas;
+
+        assert_eq!(state.request_open_route_child_count(0), Some((false, 1)));
+        assert_eq!(state.request_open_route_child_count(1), Some((false, 1)));
+        Ok(())
     }
 }

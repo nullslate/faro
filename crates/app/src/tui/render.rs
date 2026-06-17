@@ -549,6 +549,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                     .clone()
                     .unwrap_or_else(|| "-".to_string());
                 let tree_meta = app.request_tree_meta(*index);
+                let open_route = app.request_open_route_child_count(*index);
                 let domain = domain_for_url(&request.request.url);
                 let path = app
                     .request_route_remainder(*index)
@@ -567,6 +568,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                         row_index,
                         total,
                         tree_meta.as_ref(),
+                        open_route,
                         fade,
                         theme,
                     )),
@@ -607,7 +609,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     let table = Table::new(
         rows,
         [
-            Constraint::Length(18),
+            Constraint::Length(12),
             Constraint::Length(4),
             Constraint::Length(8),
             Constraint::Length(10),
@@ -619,7 +621,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     )
     .header(
         Row::new([
-            "CHILDREN", "CODE", "METHOD", "TYPE", "DOMAIN", "PATH", "TIME", "SIZE",
+            "OPEN", "CODE", "METHOD", "TYPE", "DOMAIN", "PATH", "TIME", "SIZE",
         ])
         .style(muted_style().add_modifier(Modifier::BOLD)),
     )
@@ -2328,6 +2330,7 @@ fn request_tree_marker(
     row_index: usize,
     total: usize,
     meta: Option<&RequestTreeMeta>,
+    open_route: Option<(bool, usize)>,
     fade: RowFade,
     theme: &Theme,
 ) -> Line<'static> {
@@ -2336,19 +2339,15 @@ fn request_tree_marker(
     let indent = meta
         .map(|meta| "  ".repeat(meta.depth.saturating_sub(1).min(6)))
         .unwrap_or_default();
-    let (marker, marker_style) = meta
-        .map(|meta| {
-            if meta.has_children {
-                (
-                    route_child_marker(meta.collapsed, meta.child_count),
-                    fade.accent_style(theme.active_border)
-                        .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                ("leaf".to_string(), fade.secondary_style(theme))
-            }
+    let (marker, marker_style) = open_route
+        .map(|(collapsed, child_count)| {
+            (
+                route_child_marker(collapsed, child_count),
+                fade.accent_style(theme.active_border)
+                    .add_modifier(Modifier::BOLD),
+            )
         })
-        .unwrap_or_else(|| ("leaf".to_string(), fade.secondary_style(theme)));
+        .unwrap_or_else(|| ("".to_string(), fade.secondary_style(theme)));
     Line::from(vec![
         Span::styled(branch.to_string(), branch_style),
         Span::styled("─".to_string(), fade.secondary_style(theme)),
@@ -2359,8 +2358,7 @@ fn request_tree_marker(
 
 fn route_child_marker(collapsed: bool, child_count: usize) -> String {
     let count = child_count.min(99);
-    let noun = if count == 1 { "child" } else { "children" };
-    format!("{} {count} {noun}", if collapsed { "▸" } else { "▾" })
+    format!("{} open {count}", if collapsed { "▸" } else { "▾" })
 }
 
 fn method_style(method: &str, fade: RowFade, theme: &Theme) -> Style {
@@ -3797,10 +3795,10 @@ mod tests {
     }
 
     #[test]
-    fn route_child_marker_uses_plain_language() {
-        assert_eq!(route_child_marker(true, 1), "▸ 1 child");
-        assert_eq!(route_child_marker(false, 8), "▾ 8 children");
-        assert_eq!(route_child_marker(true, 120), "▸ 99 children");
+    fn route_child_marker_shows_only_expandable_action() {
+        assert_eq!(route_child_marker(true, 1), "▸ open 1");
+        assert_eq!(route_child_marker(false, 8), "▾ open 8");
+        assert_eq!(route_child_marker(true, 120), "▸ open 99");
     }
 
     #[test]
