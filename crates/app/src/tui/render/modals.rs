@@ -4,9 +4,61 @@ use super::{
 };
 use crate::tui::state::{SqlResultsView, WorkbenchState, WorkbenchView};
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Clear, Paragraph, Row, Table, Wrap};
+
+pub(super) fn render_theme_preview(frame: &mut ratatui::Frame, app: &WorkbenchState) {
+    let area = centered_rect(frame.area(), 72, 22);
+    let theme = &app.config.theme;
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("Theme Preview", super::panel_title_style(true)),
+            Span::styled("  esc closes", muted_style()),
+        ]),
+        Line::raw(""),
+        theme_swatch("text", theme.text),
+        theme_swatch("muted", theme.muted),
+        theme_swatch("accent", theme.accent),
+        theme_swatch("panel title", theme.panel_title),
+        theme_swatch("panel border", theme.panel_border),
+        theme_swatch("active border", theme.active_border),
+        theme_swatch("tree edge", theme.tree_edge),
+        Line::raw(""),
+        theme_swatch("ok / 2xx", theme.ok),
+        theme_swatch("redirect / 3xx", theme.redirect),
+        theme_swatch("client error", theme.client_error),
+        theme_swatch("server error", theme.server_error),
+        Line::raw(""),
+        theme_swatch("xhr/fetch", theme.resource_xhr),
+        theme_swatch("image", theme.resource_image),
+        theme_swatch("script", theme.resource_script),
+        theme_swatch("style", theme.resource_style),
+        theme_swatch("sse", theme.resource_sse),
+    ];
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(themed_panel_block(
+                " Theme Preview ",
+                Some('T'),
+                true,
+                &app.config.theme,
+            ))
+            .style(Style::default().fg(GB_FG))
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn theme_swatch(label: &'static str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<14}"), label_style()),
+        Span::styled("██".to_string(), Style::default().fg(color)),
+        Span::raw("  "),
+        Span::styled(format!("{color:?}"), muted_style()),
+    ])
+}
 
 pub(super) fn render_help(frame: &mut ratatui::Frame, app: &WorkbenchState) {
     let area = centered_rect(frame.area(), 82, 24);

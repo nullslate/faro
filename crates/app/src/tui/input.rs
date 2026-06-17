@@ -6,6 +6,7 @@ pub(crate) enum InputOutcome {
     Continue,
     Quit,
     CopyCurl,
+    CopyBody,
     SaveExchange,
     OpenBrowser,
     ToggleMaximize,
@@ -18,6 +19,7 @@ pub(crate) enum InputOutcome {
     SaveLayout,
     RefreshPage,
     SqlQuery,
+    BodySearch,
     CreateScript,
     EditScript,
     RunScript,
@@ -29,6 +31,20 @@ pub(crate) enum InputOutcome {
 }
 
 pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
+    if app.input_mode == InputMode::BodySearch {
+        match key.code {
+            KeyCode::Esc => app.close_body_search(),
+            KeyCode::Enter => {
+                app.apply_body_search();
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Backspace => app.pop_body_search_char(),
+            KeyCode::Char(character) => app.push_body_search_char(character),
+            _ => {}
+        }
+        return InputOutcome::Continue;
+    }
+
     if app.input_mode == InputMode::Filtering {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => app.input_mode = InputMode::Normal,
@@ -66,6 +82,11 @@ pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcom
         }
     } else if app.sql_result.is_some() {
         handle_sql_result_key(app, key)
+    } else if app.show_theme_preview {
+        if key.code == KeyCode::Esc {
+            app.toggle_theme_preview();
+        }
+        InputOutcome::Continue
     } else if app.show_help {
         match key.code {
             KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
@@ -144,6 +165,12 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             app.set_view(WorkbenchView::Cookies);
             InputOutcome::Continue
         }
+        KeyCode::Char('/')
+            if app.view == WorkbenchView::Network && app.focus == FocusPane::Body =>
+        {
+            app.open_body_search();
+            InputOutcome::Continue
+        }
         KeyCode::Char('/') => {
             app.input_mode = InputMode::Filtering;
             InputOutcome::Continue
@@ -220,6 +247,7 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             app.next_tab();
             InputOutcome::Continue
         }
+        KeyCode::Char('Y') if app.view == WorkbenchView::Network => InputOutcome::CopyBody,
         KeyCode::Char('y') => InputOutcome::CopyCurl,
         KeyCode::Char('w') => InputOutcome::SaveExchange,
         KeyCode::Char('o') => InputOutcome::OpenBrowser,
@@ -310,8 +338,16 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
             app.toggle_density_mode();
             InputOutcome::SaveLayout
         }
+        PaletteCommand::LayoutPreset(preset) => {
+            app.apply_layout_preset(preset);
+            InputOutcome::SaveLayout
+        }
         PaletteCommand::ToggleHelp => {
             app.toggle_help();
+            InputOutcome::Continue
+        }
+        PaletteCommand::ToggleThemePreview => {
+            app.toggle_theme_preview();
             InputOutcome::Continue
         }
         PaletteCommand::TogglePerf => InputOutcome::TogglePerf,
@@ -323,6 +359,8 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
         PaletteCommand::EditReplay => InputOutcome::EditReplay,
         PaletteCommand::DiffReplay => InputOutcome::DiffReplay,
         PaletteCommand::OpenEditor => InputOutcome::OpenEditor,
+        PaletteCommand::CopyBody => InputOutcome::CopyBody,
+        PaletteCommand::BodySearch => InputOutcome::BodySearch,
         PaletteCommand::EditConsole => InputOutcome::EditConsole,
         PaletteCommand::SqlQuery => InputOutcome::SqlQuery,
         PaletteCommand::CreateScript => InputOutcome::CreateScript,

@@ -200,6 +200,7 @@ fn run_loop(
                             return Ok(());
                         }
                         InputOutcome::CopyCurl => copy_curl(app),
+                        InputOutcome::CopyBody => copy_body(app),
                         InputOutcome::SaveExchange => save_selected_exchange(app),
                         InputOutcome::OpenBrowser => open_browser(app, &mut config),
                         InputOutcome::ToggleMaximize => toggle_maximize(app),
@@ -214,6 +215,7 @@ fn run_loop(
                         InputOutcome::DiffReplay => diff_selected_replay(terminal, app)?,
                         InputOutcome::RefreshPage => refresh_page(app),
                         InputOutcome::SqlQuery => edit_sql_query(terminal, app)?,
+                        InputOutcome::BodySearch => app.open_body_search(),
                         InputOutcome::CreateScript => create_script(terminal, app)?,
                         InputOutcome::EditScript => edit_selected_script(terminal, app)?,
                         InputOutcome::RunScript => run_selected_script(app),
@@ -524,6 +526,26 @@ fn copy_curl(app: &mut WorkbenchState) {
     match copy_to_clipboard(&curl) {
         Ok(tool) => app.status = format!("copied full request as curl with {tool}"),
         Err(error) => match write_temp_file("faro-curl", "sh", &curl) {
+            Ok(path) => {
+                app.status = format!("clipboard unavailable ({error}); wrote {}", path.display())
+            }
+            Err(write_error) => {
+                app.status =
+                    format!("clipboard unavailable ({error}); temp write failed: {write_error}")
+            }
+        },
+    }
+}
+
+fn copy_body(app: &mut WorkbenchState) {
+    app.hydrate_selected_request();
+    let Some(text) = app.copy_body_text() else {
+        app.status = "no response body selected".to_string();
+        return;
+    };
+    match copy_to_clipboard(&text) {
+        Ok(tool) => app.status = format!("copied body selection with {tool}"),
+        Err(error) => match write_temp_file("faro-body", "txt", &text) {
             Ok(path) => {
                 app.status = format!("clipboard unavailable ({error}); wrote {}", path.display())
             }

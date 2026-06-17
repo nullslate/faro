@@ -55,6 +55,9 @@ pub(crate) fn render(frame: &mut ratatui::Frame, app: &mut WorkbenchState) {
     if app.show_help {
         modals::render_help(frame, app);
     }
+    if app.show_theme_preview {
+        modals::render_theme_preview(frame, app);
+    }
     if app.show_perf {
         perf::render(frame, app);
     }
@@ -550,8 +553,18 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                         )),
                         Cell::from(highlight_text(&request.request.method, &highlight_terms))
                             .style(method_style(&request.request.method, fade, theme)),
-                        Cell::from(highlight_text(resource_label, &highlight_terms))
-                            .style(resource_style(&resource_type, fade, theme)),
+                        Cell::from(resource_type_line(
+                            request,
+                            resource_label,
+                            &highlight_terms,
+                            fade,
+                            theme,
+                        ))
+                        .style(resource_style(
+                            &resource_type,
+                            fade,
+                            theme,
+                        )),
                         Cell::from(highlight_text(&domain, &highlight_terms))
                             .style(fade.secondary_style(theme)),
                         Cell::from(highlight_text(&path, &highlight_terms)).style(base_style),
@@ -590,7 +603,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
             Constraint::Length(3),
             Constraint::Length(5),
             Constraint::Length(8),
-            Constraint::Length(7),
+            Constraint::Length(9),
             Constraint::Length(20),
             Constraint::Min(24),
             Constraint::Length(11),
@@ -1373,10 +1386,10 @@ fn render_cookies(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) 
 }
 
 fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let keys = if app.input_mode == InputMode::Filtering {
-        filter_help_line()
-    } else {
-        compact_help_line(app)
+    let keys = match app.input_mode {
+        InputMode::Filtering => filter_help_line(),
+        InputMode::BodySearch => body_search_help_line(app),
+        _ => compact_help_line(app),
     };
     let mut status_spans = vec![
         Span::styled("status ", label_style()),
@@ -1446,6 +1459,24 @@ fn filter_help_line() -> Line<'static> {
     ])
 }
 
+fn body_search_help_line(app: &WorkbenchState) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("body search ", label_style()),
+        Span::raw(if app.body_search_query.is_empty() {
+            "type to find in response body".to_string()
+        } else {
+            app.body_search_query.clone()
+        }),
+        Span::raw("  "),
+        Span::styled("enter", key_style()),
+        Span::raw(" done  "),
+        Span::styled("esc", key_style()),
+        Span::raw(" close  "),
+        Span::styled("backspace", key_style()),
+        Span::raw(" delete"),
+    ])
+}
+
 fn compact_help_line(app: &WorkbenchState) -> Line<'static> {
     // Show the keys that matter for the pane the user is actually in.
     match app.focus {
@@ -1485,6 +1516,8 @@ fn compact_help_line(app: &WorkbenchState) -> Line<'static> {
             ("u/d", "scroll"),
             ("g/G", "ends"),
             ("e", "editor"),
+            ("Y", "copy"),
+            ("/", "find"),
             ("y", "curl"),
             ("?", "keys"),
         ]),
@@ -2172,6 +2205,49 @@ fn resource_label(resource_type: &str) -> &'static str {
     }
 }
 
+fn resource_type_line(
+    request: &RequestView,
+    resource_label: &str,
+    highlight_terms: &[String],
+    fade: RowFade,
+    theme: &Theme,
+) -> Line<'static> {
+    let mut line = highlight_text(resource_label, highlight_terms);
+    let mut badges = Vec::new();
+    if request.request.request_body_ref.is_some()
+        || request
+            .response
+            .as_ref()
+            .and_then(|response| response.body_size)
+            .is_some_and(|size| size > 0)
+    {
+        badges.push(("b", theme.resource_image));
+    }
+    if !request.replays.is_empty() {
+        badges.push(("r", theme.method_post));
+    }
+    if request
+        .response
+        .as_ref()
+        .is_some_and(|response| response.body_truncated)
+    {
+        badges.push(("!", theme.client_error));
+    }
+    if matches!(request.status_code(), Some(300..=399)) {
+        badges.push(("→", theme.redirect));
+    }
+    if !badges.is_empty() {
+        line.spans.push(Span::raw(" "));
+        for (badge, color) in badges {
+            line.spans.push(Span::styled(
+                badge.to_string(),
+                fade.accent_style(color).add_modifier(Modifier::BOLD),
+            ));
+        }
+    }
+    line
+}
+
 fn duration_style(duration: Option<i64>, fade: RowFade, theme: &Theme) -> Style {
     match duration {
         Some(0..=99) => fade.accent_style(theme.ok),
@@ -2246,7 +2322,12 @@ fn response_body_title(app: &WorkbenchState) -> String {
     } else {
         "Response Body"
     };
-    format!(" {kind} {status} {size} {mime} ")
+    let search = if app.body_search_query.is_empty() {
+        String::new()
+    } else {
+        format!(" find:{}", compact_value(&app.body_search_query, 24))
+    };
+    format!(" {kind} {status} {size} {mime}{search} ")
 }
 
 fn cookie_count(app: &WorkbenchState) -> usize {
@@ -3268,7 +3349,9 @@ mod tests {
             detail_percent: 38,
             palette_query: String::new(),
             palette_selected: 0,
+            body_search_query: String::new(),
             show_help: false,
+            show_theme_preview: false,
             show_perf: false,
             perf: Default::default(),
             sql_result: None,

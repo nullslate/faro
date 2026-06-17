@@ -78,7 +78,9 @@ pub(crate) struct WorkbenchState {
     pub(crate) detail_percent: u16,
     pub(crate) palette_query: String,
     pub(crate) palette_selected: usize,
+    pub(crate) body_search_query: String,
     pub(crate) show_help: bool,
+    pub(crate) show_theme_preview: bool,
     pub(crate) show_perf: bool,
     pub(crate) perf: PerfStats,
     pub(crate) sql_result: Option<SqlResultsView>,
@@ -227,7 +229,9 @@ impl WorkbenchState {
             detail_percent: layout_preference.detail_percent,
             palette_query: String::new(),
             palette_selected: 0,
+            body_search_query: String::new(),
             show_help: false,
+            show_theme_preview: false,
             show_perf: false,
             perf: PerfStats::default(),
             sql_result: None,
@@ -356,6 +360,10 @@ impl WorkbenchState {
         self.show_help = !self.show_help;
     }
 
+    pub(crate) fn toggle_theme_preview(&mut self) {
+        self.show_theme_preview = !self.show_theme_preview;
+    }
+
     pub(crate) fn toggle_perf(&mut self) {
         self.show_perf = !self.show_perf;
     }
@@ -438,6 +446,47 @@ impl WorkbenchState {
         self.palette_selected = 0;
     }
 
+    pub(crate) fn open_body_search(&mut self) {
+        self.input_mode = InputMode::BodySearch;
+        self.body_search_query.clear();
+    }
+
+    pub(crate) fn close_body_search(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.body_search_query.clear();
+    }
+
+    pub(crate) fn push_body_search_char(&mut self, character: char) {
+        self.body_search_query.push(character);
+        self.apply_body_search();
+    }
+
+    pub(crate) fn pop_body_search_char(&mut self) {
+        self.body_search_query.pop();
+        self.apply_body_search();
+    }
+
+    pub(crate) fn apply_body_search(&mut self) {
+        let query = self.body_search_query.trim().to_lowercase();
+        if query.is_empty() {
+            self.body_scroll = 0;
+            return;
+        }
+        let Some(request) = self.selected_request() else {
+            return;
+        };
+        let body = formatted_response_body(request);
+        if let Some(index) = body
+            .lines()
+            .position(|line| line.to_lowercase().contains(&query))
+        {
+            self.body_scroll = index.min(u16::MAX as usize) as u16;
+            self.status = format!("body match line {}", index + 1);
+        } else {
+            self.status = "no body search match".to_string();
+        }
+    }
+
     pub(crate) fn push_palette_char(&mut self, character: char) {
         self.palette_query.push(character);
         self.palette_selected = 0;
@@ -470,6 +519,39 @@ impl WorkbenchState {
         self.filtered_palette_entries()
             .get(self.palette_selected)
             .map(|entry| entry.command)
+    }
+
+    pub(crate) fn apply_layout_preset(&mut self, preset: LayoutPreset) {
+        match preset {
+            LayoutPreset::CompactNetwork => {
+                self.set_view(WorkbenchView::Network);
+                self.focus = FocusPane::Requests;
+                self.layout_mode = LayoutMode::Normal;
+                self.density_mode = DensityMode::Compact;
+                self.requests_percent = 66;
+                self.detail_percent = 45;
+                self.status = "layout preset: compact network".to_string();
+            }
+            LayoutPreset::BodyHeavy => {
+                self.set_view(WorkbenchView::Network);
+                self.focus = FocusPane::Body;
+                self.layout_mode = LayoutMode::Normal;
+                self.density_mode = DensityMode::Comfortable;
+                self.requests_percent = 36;
+                self.detail_percent = 28;
+                self.status = "layout preset: body heavy".to_string();
+            }
+            LayoutPreset::ConsoleHeavy => {
+                self.set_view(WorkbenchView::Console);
+                self.layout_mode = LayoutMode::Focused;
+                self.status = "layout preset: console heavy".to_string();
+            }
+            LayoutPreset::WebSocketHeavy => {
+                self.set_view(WorkbenchView::WebSockets);
+                self.layout_mode = LayoutMode::Focused;
+                self.status = "layout preset: websocket heavy".to_string();
+            }
+        }
     }
 
     pub(crate) fn filtered_palette_entries(&self) -> Vec<PaletteEntry> {
@@ -1755,6 +1837,19 @@ impl WorkbenchState {
         self.selected_request().map(build_curl)
     }
 
+    pub(crate) fn copy_body_text(&self) -> Option<String> {
+        if self.focus == FocusPane::Body {
+            let items = self.body_tree_items();
+            if let Some(item) = items.get(self.body_tree_selected) {
+                return Some(match &item.value {
+                    Some(value) => format!("{} = {value}", item.key),
+                    None => item.key.clone(),
+                });
+            }
+        }
+        self.selected_request().map(formatted_response_body)
+    }
+
     pub(crate) fn replay_curl_args(&self) -> Option<Vec<String>> {
         self.selected_request().map(build_curl_args)
     }
@@ -2051,6 +2146,7 @@ pub(crate) enum InputMode {
     Normal,
     Filtering,
     Palette,
+    BodySearch,
 }
 
 impl InputMode {
@@ -2059,8 +2155,17 @@ impl InputMode {
             Self::Normal => "normal",
             Self::Filtering => "filter",
             Self::Palette => "palette",
+            Self::BodySearch => "body-search",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayoutPreset {
+    CompactNetwork,
+    BodyHeavy,
+    ConsoleHeavy,
+    WebSocketHeavy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2074,7 +2179,9 @@ pub(crate) enum PaletteCommand {
     SortDirection,
     ToggleLayout,
     ToggleDensity,
+    LayoutPreset(LayoutPreset),
     ToggleHelp,
+    ToggleThemePreview,
     TogglePerf,
     OpenBrowser,
     RefreshPage,
@@ -2084,6 +2191,8 @@ pub(crate) enum PaletteCommand {
     EditReplay,
     DiffReplay,
     OpenEditor,
+    CopyBody,
+    BodySearch,
     EditConsole,
     SqlQuery,
     CreateScript,
@@ -2274,9 +2383,34 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         command: PaletteCommand::ToggleDensity,
     },
     PaletteEntry {
+        title: "Layout: Compact Network",
+        hint: "preset dense request table",
+        command: PaletteCommand::LayoutPreset(LayoutPreset::CompactNetwork),
+    },
+    PaletteEntry {
+        title: "Layout: Body Heavy",
+        hint: "preset response viewer",
+        command: PaletteCommand::LayoutPreset(LayoutPreset::BodyHeavy),
+    },
+    PaletteEntry {
+        title: "Layout: Console Heavy",
+        hint: "preset console focus",
+        command: PaletteCommand::LayoutPreset(LayoutPreset::ConsoleHeavy),
+    },
+    PaletteEntry {
+        title: "Layout: WebSocket Heavy",
+        hint: "preset websocket focus",
+        command: PaletteCommand::LayoutPreset(LayoutPreset::WebSocketHeavy),
+    },
+    PaletteEntry {
         title: "Debug: Toggle Perf",
         hint: "render timing overlay",
         command: PaletteCommand::TogglePerf,
+    },
+    PaletteEntry {
+        title: "Theme: Preview",
+        hint: "colors swatches gruvbox",
+        command: PaletteCommand::ToggleThemePreview,
     },
     PaletteEntry {
         title: "Open Browser",
@@ -2317,6 +2451,16 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "Open Body in Editor",
         hint: "response request",
         command: PaletteCommand::OpenEditor,
+    },
+    PaletteEntry {
+        title: "Copy Body Selection",
+        hint: "response body json path value",
+        command: PaletteCommand::CopyBody,
+    },
+    PaletteEntry {
+        title: "Body Search",
+        hint: "find response body text",
+        command: PaletteCommand::BodySearch,
     },
     PaletteEntry {
         title: "Console: Evaluate JS",
