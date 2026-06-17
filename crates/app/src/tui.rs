@@ -1,6 +1,7 @@
 mod input;
 mod layout;
 mod render;
+mod script_templates;
 mod scripts;
 mod state;
 
@@ -151,9 +152,16 @@ fn run_loop(
     let mut detail_inflight = HashSet::new();
     let mut pending_detail_load = None;
     loop {
+        let tick_started = Instant::now();
+        let capture_started = Instant::now();
         drain_capture_updates(app, config.updates.as_ref());
+        app.perf.last_capture_drain_ms = capture_started.elapsed().as_millis();
+        let replay_started = Instant::now();
         drain_replay_updates(app, &replay_rx);
+        app.perf.last_replay_drain_ms = replay_started.elapsed().as_millis();
+        let detail_started = Instant::now();
         drain_detail_updates(app, &detail_rx, &mut detail_inflight);
+        app.perf.last_detail_drain_ms = detail_started.elapsed().as_millis();
         maybe_start_selected_detail_load(
             app,
             &detail_tx,
@@ -166,13 +174,21 @@ fn run_loop(
             needs_draw = true;
         }
         if needs_draw {
+            let draw_started = Instant::now();
             terminal
                 .draw(|frame| render(frame, app))
                 .context("draw TUI frame")?;
+            app.perf.last_frame_ms = draw_started.elapsed().as_millis();
+            app.perf.max_frame_ms = app.perf.max_frame_ms.max(app.perf.last_frame_ms);
+            app.perf.frame_count = app.perf.frame_count.saturating_add(1);
             needs_draw = false;
         }
 
-        if event::poll(Duration::from_millis(150)).context("poll terminal events")? {
+        let poll_started = Instant::now();
+        let has_event = event::poll(Duration::from_millis(150)).context("poll terminal events")?;
+        app.perf.last_poll_ms = poll_started.elapsed().as_millis();
+        app.perf.max_poll_ms = app.perf.max_poll_ms.max(app.perf.last_poll_ms);
+        if has_event {
             match event::read().context("read terminal event")? {
                 Event::Key(key) => {
                     let previous_focus = app.focus;
@@ -205,6 +221,7 @@ fn run_loop(
                         InputOutcome::RenameScript => rename_selected_script(terminal, app)?,
                         InputOutcome::DeleteScript => delete_selected_script(app),
                         InputOutcome::ResetScriptTemplates => reset_script_templates(app),
+                        InputOutcome::TogglePerf => app.toggle_perf(),
                     }
                     if outcome != InputOutcome::ToggleMaximize
                         && app.layout_mode == layout::LayoutMode::Focused
@@ -234,6 +251,8 @@ fn run_loop(
         } else {
             needs_draw = true;
         }
+        app.perf.last_tick_ms = tick_started.elapsed().as_millis();
+        app.perf.max_tick_ms = app.perf.max_tick_ms.max(app.perf.last_tick_ms);
     }
 }
 
@@ -563,7 +582,7 @@ fn seed_script_templates(app: &WorkbenchState, force: bool) -> anyhow::Result<us
         .map(|script| script.name)
         .collect::<HashSet<_>>();
     let mut added = 0;
-    for template in SCRIPT_TEMPLATES {
+    for template in script_templates::TEMPLATES {
         if existing.contains(template.name) {
             continue;
         }
@@ -746,176 +765,8 @@ fn next_script_name(app: &WorkbenchState) -> String {
 }
 
 fn default_script_body() -> String {
-    SCRIPT_TEMPLATES
-        .first()
-        .map(|template| template.body.to_string())
-        .unwrap_or_default()
+    script_templates::default_body()
 }
-
-struct ScriptTemplate {
-    name: &'static str,
-    body: &'static str,
-}
-
-const SCRIPT_TEMPLATES: &[ScriptTemplate] = &[
-    ScriptTemplate {
-        name: "Investigate failures",
-        body: r#"// name: Investigate failures
-// Find 4xx/5xx requests and print the URL plus captured response snippet.
-// Faro scripts use Rhai: let, for ... in, #{ map: "literal" }.
-
-let failed = faros.requests.filter(#{
-    status: #{ gte: 400 }
-});
-
-println(`failed requests: ${failed.len()}`);
-
-for req in failed {
-    println(`${req.status} ${req.method} ${req.url}`);
-    if req.response_body.len() > 0 {
-        println(req.response_body.sub_string(0, 240));
-    }
-    println("");
-}
-"#,
-    },
-    ScriptTemplate {
-        name: "Slow request leaderboard",
-        body: r#"// name: Slow request leaderboard
-// Print the slowest captured requests using read-only SQL.
-
-let rows = faros.sql.query(`
-    SELECT
-        method,
-        url,
-        responses.status_code AS status,
-        requests.completed_at - requests.started_at AS duration_ms
-    FROM requests
-    LEFT JOIN responses ON responses.request_id = requests.id
-    WHERE requests.completed_at IS NOT NULL
-    ORDER BY duration_ms DESC
-    LIMIT 25
-`);
-
-for row in rows {
-    println(`${row.duration_ms}ms ${row.status} ${row.method} ${row.url}`);
-}
-"#,
-    },
-    ScriptTemplate {
-        name: "Console error digest",
-        body: r#"// name: Console error digest
-// Summarize console errors and fatal logs from the current capture.
-
-let errors = faros.console.errors();
-println(`console errors: ${errors.len()}`);
-
-for log in errors {
-    println(`${log.level} ${log.source}`);
-    println(log.message);
-    println("");
-}
-"#,
-    },
-    ScriptTemplate {
-        name: "Auth state snapshot",
-        body: r#"// name: Auth state snapshot
-// Print likely auth/session data from cookies, localStorage, and sessionStorage.
-
-let needles = ["auth", "token", "session", "jwt", "user", "csrf"];
-
-println("cookies");
-for cookie in faros.cookies.list() {
-    let key = cookie.name.to_lower();
-    for needle in needles {
-        if key.contains(needle) {
-            println(`${cookie.domain} ${cookie.name}=${cookie.value}`);
-        }
-    }
-}
-
-println("");
-println("localStorage");
-for entry in faros.storage.local() {
-    let key = entry.key.to_lower();
-    for needle in needles {
-        if key.contains(needle) {
-            println(`${entry.origin} ${entry.key}=${entry.value}`);
-        }
-    }
-}
-
-println("");
-println("sessionStorage");
-for entry in faros.storage.session() {
-    let key = entry.key.to_lower();
-    for needle in needles {
-        if key.contains(needle) {
-            println(`${entry.origin} ${entry.key}=${entry.value}`);
-        }
-    }
-}
-"#,
-    },
-    ScriptTemplate {
-        name: "API inventory",
-        body: r#"// name: API inventory
-// Group captured API-ish traffic by host, method, status, and normalized route.
-
-let rows = faros.sql.query(`
-    SELECT
-        method,
-        CASE
-            WHEN instr(replace(url, 'https://', ''), '/') = 0 THEN replace(url, 'https://', '')
-            ELSE substr(replace(url, 'https://', ''), 1, instr(replace(url, 'https://', ''), '/') - 1)
-        END AS host,
-        responses.status_code AS status,
-        COUNT(*) AS count
-    FROM requests
-    LEFT JOIN responses ON responses.request_id = requests.id
-    WHERE url LIKE '%/api/%'
-    GROUP BY method, host, status
-    ORDER BY count DESC
-    LIMIT 50
-`);
-
-for row in rows {
-    println(`${row.count}x ${row.status} ${row.method} ${row.host}`);
-}
-"#,
-    },
-    ScriptTemplate {
-        name: "Latest login probe",
-        body: r#"// name: Latest login probe
-// Inspect the latest request whose URL contains /login.
-
-let logins = faros.requests.filter(#{ url: "/login" });
-
-if logins.len() == 0 {
-    println("no /login request captured");
-} else {
-    let login = logins[logins.len() - 1];
-    println(`${login.status} ${login.method} ${login.url}`);
-    println("");
-    println("request body");
-    println(login.body);
-    println("");
-    println("response body");
-    println(login.response_body.sub_string(0, 1000));
-}
-"#,
-    },
-    ScriptTemplate {
-        name: "Reload and smoke check",
-        body: r#"// name: Reload and smoke check
-// Reload the attached page, wait briefly, then print title through CDP.
-
-println(faros.browser.reload());
-sleep(750);
-println(faros.browser.evaluate("document.title"));
-"#,
-    },
-];
 
 fn replay_selected_request(app: &mut WorkbenchState, replay_tx: &mpsc::Sender<ReplayCompletion>) {
     app.hydrate_selected_request();
@@ -1920,6 +1771,7 @@ fn drain_capture_updates(
 
 fn drain_replay_updates(app: &mut WorkbenchState, updates: &mpsc::Receiver<ReplayCompletion>) {
     while let Ok(update) = updates.try_recv() {
+        app.perf.replay_completed = app.perf.replay_completed.saturating_add(1);
         match app.refresh_replays_for_request(&update.request_id) {
             Ok(()) => app.status = update.status,
             Err(error) => app.status = format!("{}; replay refresh failed: {error}", update.status),
@@ -1928,7 +1780,7 @@ fn drain_replay_updates(app: &mut WorkbenchState, updates: &mpsc::Receiver<Repla
 }
 
 fn maybe_start_selected_detail_load(
-    app: &WorkbenchState,
+    app: &mut WorkbenchState,
     tx: &mpsc::Sender<DetailLoadCompletion>,
     inflight: &mut HashSet<String>,
     pending: &mut Option<(String, Instant)>,
@@ -1955,6 +1807,7 @@ fn maybe_start_selected_detail_load(
     }
 
     inflight.insert(task.request_id.clone());
+    app.perf.detail_load_started = app.perf.detail_load_started.saturating_add(1);
     *pending = None;
     let tx = tx.clone();
     thread::spawn(move || {
@@ -2008,6 +1861,7 @@ fn drain_detail_updates(
 ) {
     while let Ok(update) = updates.try_recv() {
         inflight.remove(&update.request_id);
+        app.perf.detail_load_completed = app.perf.detail_load_completed.saturating_add(1);
         match update.result {
             Ok(details) => app.apply_request_details(
                 &update.request_id,

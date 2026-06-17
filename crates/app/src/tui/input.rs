@@ -25,6 +25,7 @@ pub(crate) enum InputOutcome {
     RenameScript,
     DeleteScript,
     ResetScriptTemplates,
+    TogglePerf,
 }
 
 pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
@@ -164,6 +165,7 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             app.toggle_help();
             InputOutcome::Continue
         }
+        KeyCode::Char('~') => InputOutcome::TogglePerf,
         KeyCode::Char('p') => {
             app.open_palette();
             InputOutcome::Continue
@@ -312,6 +314,7 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
             app.toggle_help();
             InputOutcome::Continue
         }
+        PaletteCommand::TogglePerf => InputOutcome::TogglePerf,
         PaletteCommand::OpenBrowser => InputOutcome::OpenBrowser,
         PaletteCommand::RefreshPage => InputOutcome::RefreshPage,
         PaletteCommand::CopyCurl => InputOutcome::CopyCurl,

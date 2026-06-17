@@ -14,6 +14,14 @@ use std::time::Instant;
 
 use super::layout::{DensityMode, LayoutMode, LayoutPreference, clamp_split_percent};
 
+mod routes;
+
+use routes::{
+    build_request_tree_metas, group_label, group_path_segment_count, parent_group_key,
+    request_group_keys, route_breadcrumb_for_group, route_label_for_group, strip_route_segments,
+};
+pub(crate) use routes::{domain_for_url, path_for_url};
+
 pub(crate) type ReplayContext = (String, Option<String>, Option<String>, String, String);
 
 pub(crate) struct WorkbenchState {
@@ -69,6 +77,8 @@ pub(crate) struct WorkbenchState {
     pub(crate) palette_query: String,
     pub(crate) palette_selected: usize,
     pub(crate) show_help: bool,
+    pub(crate) show_perf: bool,
+    pub(crate) perf: PerfStats,
     pub(crate) sql_result: Option<SqlResultsView>,
     pub(crate) sql_row_scroll: usize,
     pub(crate) sql_col_scroll: usize,
@@ -214,6 +224,8 @@ impl WorkbenchState {
             palette_query: String::new(),
             palette_selected: 0,
             show_help: false,
+            show_perf: false,
+            perf: PerfStats::default(),
             sql_result: None,
             sql_row_scroll: 0,
             sql_col_scroll: 0,
@@ -322,6 +334,10 @@ impl WorkbenchState {
 
     pub(crate) fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub(crate) fn toggle_perf(&mut self) {
+        self.show_perf = !self.show_perf;
     }
 
     pub(crate) fn apply_sql_request_filter(&mut self, query: String, ids: HashSet<String>) {
@@ -2060,6 +2076,7 @@ pub(crate) enum PaletteCommand {
     ToggleLayout,
     ToggleDensity,
     ToggleHelp,
+    TogglePerf,
     OpenBrowser,
     RefreshPage,
     CopyCurl,
@@ -2258,6 +2275,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         command: PaletteCommand::ToggleDensity,
     },
     PaletteEntry {
+        title: "Debug: Toggle Perf",
+        hint: "render timing overlay",
+        command: PaletteCommand::TogglePerf,
+    },
+    PaletteEntry {
         title: "Open Browser",
         hint: "start capture cdp",
         command: PaletteCommand::OpenBrowser,
@@ -2377,6 +2399,23 @@ pub(crate) struct RouteSummary {
     pub(crate) slow: usize,
     pub(crate) total_size: i64,
     pub(crate) max_duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PerfStats {
+    pub(crate) frame_count: u64,
+    pub(crate) last_frame_ms: u128,
+    pub(crate) max_frame_ms: u128,
+    pub(crate) last_tick_ms: u128,
+    pub(crate) max_tick_ms: u128,
+    pub(crate) last_poll_ms: u128,
+    pub(crate) max_poll_ms: u128,
+    pub(crate) last_capture_drain_ms: u128,
+    pub(crate) last_replay_drain_ms: u128,
+    pub(crate) last_detail_drain_ms: u128,
+    pub(crate) detail_load_started: u64,
+    pub(crate) detail_load_completed: u64,
+    pub(crate) replay_completed: u64,
 }
 
 fn fuzzy_contains(haystack: &str, needle: &str) -> bool {
@@ -3454,158 +3493,6 @@ fn shell_quote(value: &str) -> String {
         return "''".to_string();
     }
     format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-pub(crate) fn domain_for_url(url: &str) -> String {
-    let without_scheme = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
-    without_scheme
-        .split('/')
-        .next()
-        .unwrap_or(without_scheme)
-        .to_string()
-}
-
-pub(crate) fn path_for_url(url: &str) -> String {
-    let without_scheme = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
-    without_scheme
-        .find('/')
-        .map(|index| without_scheme[index..].to_string())
-        .unwrap_or_else(|| "/".to_string())
-}
-
-fn request_tree_parts(request: &RequestView) -> Vec<String> {
-    let mut parts = vec![domain_for_url(&request.request.url)];
-    parts.extend(normalized_path_segments(&path_for_url(
-        &request.request.url,
-    )));
-    parts
-}
-
-fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestTreeMeta> {
-    let mut descendant_counts = HashMap::new();
-    for group in requests.iter().flat_map(request_group_keys) {
-        *descendant_counts.entry(group).or_insert(0) += 1;
-    }
-    requests
-        .iter()
-        .map(|request| {
-            let parts = request_tree_parts(request);
-            let group_key = group_key_for_parts(&parts);
-            let ancestor_keys = ancestor_keys_for_parts(&parts);
-            let child_count = group_key
-                .as_ref()
-                .and_then(|key| descendant_counts.get(key).copied())
-                .unwrap_or(0);
-            RequestTreeMeta {
-                depth: parts.len().saturating_sub(1),
-                group_key,
-                ancestor_keys,
-                has_children: child_count > 0,
-                child_count,
-                collapsed: false,
-            }
-        })
-        .collect()
-}
-
-fn normalized_path_segments(path: &str) -> Vec<String> {
-    let path = path.split(['?', '#']).next().unwrap_or(path);
-    path.split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(normalize_path_segment)
-        .collect()
-}
-
-fn normalize_path_segment(segment: &str) -> String {
-    if is_dynamic_path_segment(segment) {
-        ":id".to_string()
-    } else {
-        segment.to_string()
-    }
-}
-
-fn is_dynamic_path_segment(segment: &str) -> bool {
-    let trimmed = segment.trim_matches(|ch: char| ch == '-' || ch == '_');
-    let hexish = trimmed
-        .chars()
-        .all(|ch| ch.is_ascii_hexdigit() || ch == '-');
-    trimmed.chars().all(|ch| ch.is_ascii_digit())
-        || (trimmed.len() >= 8 && hexish)
-        || (trimmed.contains('-') && trimmed.len() >= 12 && hexish)
-}
-
-fn group_key_for_parts(parts: &[String]) -> Option<String> {
-    (parts.len() > 1).then(|| parts.join("/"))
-}
-
-fn request_group_keys(request: &RequestView) -> Vec<String> {
-    let parts = request_tree_parts(request);
-    ancestor_keys_for_parts(&parts)
-}
-
-fn ancestor_keys_for_parts(parts: &[String]) -> Vec<String> {
-    (2..parts.len()).map(|end| parts[..end].join("/")).collect()
-}
-
-fn group_label(group_key: &str) -> String {
-    group_key
-        .split('/')
-        .next_back()
-        .map(str::to_string)
-        .unwrap_or_else(|| group_key.to_string())
-}
-
-fn route_label_for_group(group_key: &str) -> String {
-    let mut parts = group_key.split('/');
-    let Some(domain) = parts.next() else {
-        return group_key.to_string();
-    };
-    let path = parts.collect::<Vec<_>>().join("/");
-    if path.is_empty() {
-        domain.to_string()
-    } else {
-        format!("{domain}/{path}")
-    }
-}
-
-fn route_breadcrumb_for_group(group_key: &str) -> String {
-    group_key.split('/').collect::<Vec<_>>().join(" / ")
-}
-
-fn parent_group_key(group_key: &str) -> Option<String> {
-    let mut parts = group_key.split('/').collect::<Vec<_>>();
-    (parts.len() > 2).then(|| {
-        parts.pop();
-        parts.join("/")
-    })
-}
-
-fn group_path_segment_count(group_key: &str) -> usize {
-    group_key.split('/').skip(1).count()
-}
-
-fn strip_route_segments(path: &str, segment_count: usize) -> String {
-    if segment_count == 0 {
-        return path.to_string();
-    }
-    let (path_only, suffix) = path
-        .find(['?', '#'])
-        .map(|index| (&path[..index], &path[index..]))
-        .unwrap_or((path, ""));
-    let segments = path_only
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    if segments.len() <= segment_count {
-        return format!("/{suffix}");
-    }
-    format!("/{}{}", segments[segment_count..].join("/"), suffix)
 }
 
 fn extension_for_mime(mime: &str) -> &'static str {
