@@ -609,7 +609,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     let table = Table::new(
         rows,
         [
-            Constraint::Length(12),
+            Constraint::Length(10),
             Constraint::Length(4),
             Constraint::Length(8),
             Constraint::Length(10),
@@ -2355,27 +2355,24 @@ fn request_tree_marker(
                 )
             }
         })
-        .unwrap_or_else(|| ("".to_string(), fade.secondary_style(theme)));
+        .unwrap_or_else(|| ("   ".to_string(), fade.secondary_style(theme)));
     Line::from(vec![
+        Span::styled(marker, marker_style),
+        Span::raw(" "),
         Span::styled(branch.to_string(), branch_style),
         Span::styled("─".to_string(), fade.secondary_style(theme)),
         Span::raw(indent),
-        Span::styled(marker, marker_style),
     ])
 }
 
 fn route_child_marker(collapsed: bool, child_count: usize) -> String {
     let count = child_count.min(99);
-    format!(
-        "{} {} {count}",
-        if collapsed { "▸" } else { "▾" },
-        "children"
-    )
+    format!("{}{count:02}", if collapsed { "+" } else { "-" })
 }
 
-fn route_ancestor_marker(collapsed: bool, child_count: usize) -> String {
+fn route_ancestor_marker(_collapsed: bool, child_count: usize) -> String {
     let count = child_count.min(99);
-    format!("{} open {count}", if collapsed { "↳▸" } else { "↳▾" })
+    format!(">{count:02}")
 }
 
 fn method_style(method: &str, fade: RowFade, theme: &Theme) -> Style {
@@ -3813,12 +3810,12 @@ mod tests {
 
     #[test]
     fn route_markers_distinguish_parent_from_drillthrough_rows() {
-        assert_eq!(route_child_marker(true, 1), "▸ children 1");
-        assert_eq!(route_child_marker(false, 8), "▾ children 8");
-        assert_eq!(route_child_marker(true, 120), "▸ children 99");
-        assert_eq!(route_ancestor_marker(true, 1), "↳▸ open 1");
-        assert_eq!(route_ancestor_marker(false, 8), "↳▾ open 8");
-        assert_eq!(route_ancestor_marker(true, 120), "↳▸ open 99");
+        assert_eq!(route_child_marker(true, 1), "+01");
+        assert_eq!(route_child_marker(false, 8), "-08");
+        assert_eq!(route_child_marker(true, 120), "+99");
+        assert_eq!(route_ancestor_marker(true, 1), ">01");
+        assert_eq!(route_ancestor_marker(false, 8), ">08");
+        assert_eq!(route_ancestor_marker(true, 120), ">99");
     }
 
     #[test]
