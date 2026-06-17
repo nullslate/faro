@@ -1,69 +1,108 @@
-# Devbench TUI
+# Devbench
 
-Terminal-first frontend development workbench.
+Devbench is a terminal-first browser debugging workbench for frontend and full-stack development.
 
-Devbench TUI does not embed Chromium and does not render web pages. It launches or
-attaches to an external Chromium-based browser through the Chrome DevTools Protocol
-and persists captured observations into SQLite.
+It launches or attaches to a Chromium-family browser through the Chrome DevTools Protocol, captures browser observations into SQLite, and lets humans and agents inspect the result through a TUI, CLI, SQL, or MCP.
 
 ```text
-Browser -> CDP -> Capture -> SQLite -> Ratatui
+Browser -> Chrome DevTools Protocol -> Devbench capture -> SQLite -> TUI / CLI / MCP
 ```
 
-The archived CEF/GTK prototype lives at `../devbench`.
+Devbench does not embed Chromium and does not render web pages in the terminal. It controls a real browser and keeps a durable local debugging database.
 
-## Run
+## Features
+
+- Network request tree with route drilldown, filters, presets, response details, and replay history.
+- Captured request/response headers, query params, request bodies, bounded text response bodies, SSE parsing, and small image previews where the terminal supports inline images.
+- Console logs, page errors, and JavaScript scratch evaluation through `$EDITOR`.
+- Storage and cookies views with captured snapshots and live mutation events.
+- Copy any captured request as a full `curl` command.
+- Replay captured requests with `curl` and persist replay status/body metadata.
+- Read-only SQL editor in the TUI, plus CLI/MCP read-only SQL for agents.
+- Agent-friendly CLI and MCP server for capture, inspection, replay, and SQL.
+- TOML config in `~/.config/devbench/config.toml` or `$XDG_CONFIG_HOME/devbench/config.toml`.
+
+## Quick Start
+
+### Install From Source
+
+Prerequisites:
+
+- Rust stable, edition 2024 capable.
+- A Chromium-family browser: Chromium, Chrome, Brave, etc.
+- `curl` for request replay.
+- Optional: `nvim` or another `$EDITOR` for body editing, SQL, and console evaluation.
+
+```sh
+git clone <repo-url> devbench
+cd devbench
+cargo install --path crates/app
+```
+
+Run the TUI against a local app:
+
+```sh
+devbench http://localhost:5173
+```
+
+Press `o` to launch the browser and start capture. Use eager launch when you want capture to start immediately:
+
+```sh
+devbench --launch-on-start http://localhost:5173
+```
+
+Open a previously captured database without launching a browser:
+
+```sh
+devbench tui ~/.config/devbench/devbench.db
+```
+
+### Run Without Installing
 
 ```sh
 cargo run -- http://localhost:5173
-cargo run -- --db /tmp/devbench.db http://localhost:5173
-cargo run -- --cdp-port 9223 http://localhost:5173
-cargo run -- --attach-port 9222 http://localhost:5173
-cargo run -- tui /tmp/devbench.db
+cargo run -- --launch-on-start http://localhost:5173
 ```
 
-Default URL mode opens the TUI without launching a browser. Press `o` to open a
-Chromium-family browser and start CDP capture. Use `--launch-on-start` if you
-want eager launch. Use `--cdp-port` only when you need a stable launch port. Use
-`--attach-port` with an already-running browser, for example:
+### Attach To An Existing Browser
 
 ```sh
 chromium --remote-debugging-port=9222 --user-data-dir=/tmp/devbench-profile
-cargo run -- --attach-port 9222 http://localhost:5173
+devbench --attach-port 9222 http://localhost:5173
 ```
 
-Keys:
+Use `DEVBENCH_BROWSER=/path/to/chrome-or-chromium` to override browser discovery.
+
+## TUI Basics
+
+Common keys:
 
 ```text
 q/esc   quit
-tab     switch focus between Requests, Detail, Body, Console, Storage, and Cookies
+tab     switch focus
 1-4     switch views: Network, Console, Storage, Cookies
 j/k     move focused selection
+enter   drill into a route / expand selected tree item
+backspace go up one route level
 h/l     switch request detail tab
-m       toggle persisted focused-pane layout
-ctrl+arrows resize persisted Network splits
 p       open command palette
 o       open browser and start capture
 y       copy selected request as curl
 w       save selected request/response exchange to /tmp
-r       replay selected request with curl, persist the replay, and write output to /tmp
-R       edit selected request in $EDITOR, then replay and persist it
+r       replay selected request with curl
+R       edit selected request in $EDITOR, then replay
 D       diff original response body against latest replay response body
 s/S     cycle request sort / toggle sort direction
 f       cycle quick network filter preset
-e       open selected body in $EDITOR, falling back to nvim
+e       open selected item in $EDITOR
 u/d     scroll focused detail/body pane
 g/G     jump to top/bottom in focused pane
 /       filter requests
-?       show floating key/filter help
+?       floating key/filter help
 c       clear request filter
 ```
 
-In the Console view (`2`), `e` opens a JavaScript scratch file in `$EDITOR`
-and evaluates it in the inspected page through CDP. The result is persisted back
-into the Console log.
-
-Request filters support plain text plus structured tokens:
+Request filters support plain text, structured fields, and case-insensitive regex patterns:
 
 ```text
 method:post
@@ -83,56 +122,192 @@ has:error
 has:replay
 duration:>500
 size:>100kb
-```
-
-Plain text terms search across method, URL, type, status, MIME, headers, and
-captured request/response bodies. Plain terms and structured values also accept
-case-insensitive regex patterns:
-
-```text
 api/(users|teams)
 path:/api/v[0-9]+
 method:^(post|put)$
-/graphql|rest/
 ```
 
-Visible request-list matches are highlighted. Press `f` to cycle quick presets:
-all, errors, JSON, fetch, XHR, SSE, images, scripts, styles, documents, with
-body, slow, large, and replayed.
+Quick presets include all, errors, JSON, fetch, XHR, SSE, images, scripts, styles, documents, with body, slow, large, and replayed.
 
-SSE responses (`text/event-stream`) are shown as parsed event entries in the
-response body panes.
+## CLI
 
-Image responses can be previewed inline when small image bodies are captured and
-the terminal supports Kitty or iTerm image protocols. Other terminals show image
-metadata and capture status instead.
+The CLI is designed for humans and agents that want to inspect Devbench without opening the TUI.
 
-The default view is Network. Console, Storage, and Cookies are available as
-dedicated full-screen views instead of always consuming Network space.
+Capture a page without the TUI:
 
-Request detail tabs include overview, query params, request/response headers,
-request/response bodies, timing, and replay history.
+```sh
+devbench capture https://example.com --for 15s --json
+```
 
-Current vertical slice:
+Inspect captured requests:
 
-1. Launches an external Chromium-family browser.
-2. Connects through CDP on a local debugging port.
-3. Enables Network and reloads the page for capture.
-4. Persists requests, request bodies, responses, bounded text response bodies, console logs, live storage events, live cookie events, and reconciliation snapshots.
-5. Persists replay attempts with exit/status/body metadata.
-6. Displays captured requests, request detail, response body, replay status, console output, storage, and cookies in Ratatui.
+```sh
+devbench requests --route /api --filter "status >= 400" --json
+devbench request get <request-id> --body --json
+devbench request curl <request-id>
+```
 
-Set `DEVBENCH_BROWSER=/path/to/chrome-or-chromium` to override browser discovery.
+Inspect browser state:
 
-Current limitations:
+```sh
+devbench console errors --json
+devbench storage get localStorage auth --json
+devbench cookies list --json
+```
 
-- Storage mutation tracking is CDP DOMStorage-based; snapshots are only baseline/reconciliation.
-- Cookie mutation tracking uses HTTP `Set-Cookie` observation plus a source-free `document.cookie` page agent.
+Replay and query:
 
-## Current Workspace
+```sh
+devbench replay <request-id> --json
+devbench sql "select * from requests where status_code >= 500" --json
+```
 
-- `devbench-core`: retained domain models.
-- `devbench-store`: retained SQLite event store and projections.
-- `devbench-capture`: retained source-neutral ingestion pipeline.
-- `devbench-cdp`: new CDP/browser control plane.
-- `devbench`: CLI/TUI bootstrap.
+Route filters accept:
+
+- `/api/users`: exact route and descendants.
+- `/api/users/:id`: one dynamic path segment.
+- `/api/*`: wildcard for the rest of the path.
+
+Use `--db <path>` with any command to target a specific SQLite database.
+
+## MCP And Agent Integration
+
+Devbench includes a stdio MCP server:
+
+```sh
+devbench mcp
+```
+
+Example MCP config:
+
+```json
+{
+  "mcpServers": {
+    "devbench": {
+      "command": "devbench",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Use a specific database:
+
+```json
+{
+  "mcpServers": {
+    "devbench": {
+      "command": "devbench",
+      "args": ["--db", "/path/to/devbench.db", "mcp"]
+    }
+  }
+}
+```
+
+Available MCP tools:
+
+- `capture_url`
+- `list_requests`
+- `get_request`
+- `get_response_body`
+- `list_console_errors`
+- `get_storage_item`
+- `list_cookies`
+- `copy_request_as_curl`
+- `replay_request`
+- `run_readonly_sql`
+
+The importable agent package lives in:
+
+```text
+agents/devbench/
+```
+
+It contains:
+
+- `SKILL.md`: workflow instructions for agent tools.
+- `mcp.json`: ready-to-copy MCP server config.
+
+## Configuration
+
+On first run, Devbench creates:
+
+```text
+$XDG_CONFIG_HOME/devbench/config.toml
+```
+
+or:
+
+```text
+~/.config/devbench/config.toml
+```
+
+The default database path is `devbench.db` relative to the config directory, so the default DB is usually:
+
+```text
+~/.config/devbench/devbench.db
+```
+
+Important config fields:
+
+```toml
+[app]
+db_path = "devbench.db"
+launch_on_start = false
+
+[ui]
+bottom_fade_rows = 3
+
+[theme]
+text = "#d4be98"
+muted = "#928374"
+accent = "#89b482"
+panel_title = "#d8a657"
+panel_border = "#3c3836"
+active_border = "#89b482"
+```
+
+The default theme is Gruvbox-inspired and can be customized with hex colors or supported terminal color names.
+
+## Architecture
+
+Workspace crates:
+
+- `devbench-core`: domain models and event types.
+- `devbench-store`: SQLite event store, projections, and read-only SQL guardrails.
+- `devbench-capture`: source-neutral ingestion pipeline.
+- `devbench-cdp`: Chrome DevTools Protocol capture/control plane.
+- `devbench`: CLI, TUI, and MCP entrypoint.
+
+Captured data is persisted in SQLite so the TUI, CLI, SQL, and MCP all inspect the same source of truth.
+
+## Development
+
+Run the standard checks:
+
+```sh
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
+rg -n "\.ok\(\)|\.unwrap\(\)|\.expect\(" crates
+```
+
+Run locally:
+
+```sh
+cargo run -- http://localhost:5173
+cargo run -- capture http://localhost:5173 --for 10s --json
+cargo run -- --db /tmp/devbench.db mcp
+```
+
+## Current Limitations
+
+- Devbench currently targets Chromium-family browsers through CDP.
+- Response body capture is bounded to avoid unbounded database growth.
+- Storage mutation tracking is CDP DOMStorage-based; snapshots are used for baseline and reconciliation.
+- Cookie mutation tracking uses HTTP `Set-Cookie` observation plus a page-side `document.cookie` observer.
+- MCP support is intentionally narrow and DB-first; live page evaluation is still CLI/TUI-oriented.
+
+## License
+
+MIT
