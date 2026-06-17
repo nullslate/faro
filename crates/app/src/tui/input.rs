@@ -18,6 +18,7 @@ pub(crate) enum InputOutcome {
     SaveLayout,
     RefreshPage,
     SqlQuery,
+    RunScript,
 }
 
 pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
@@ -125,10 +126,14 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             InputOutcome::Continue
         }
         KeyCode::Char('4') => {
-            app.set_view(WorkbenchView::Storage);
+            app.set_view(WorkbenchView::Scripts);
             InputOutcome::Continue
         }
         KeyCode::Char('5') => {
+            app.set_view(WorkbenchView::Storage);
+            InputOutcome::Continue
+        }
+        KeyCode::Char('6') => {
             app.set_view(WorkbenchView::Cookies);
             InputOutcome::Continue
         }
@@ -217,6 +222,7 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
         }
         KeyCode::Char('e') if app.view == WorkbenchView::Console => InputOutcome::EditConsole,
         KeyCode::Char('e') => InputOutcome::OpenEditor,
+        KeyCode::Char('r') if app.view == WorkbenchView::Scripts => InputOutcome::RunScript,
         KeyCode::Char('r') => InputOutcome::Replay,
         KeyCode::Char('R') => InputOutcome::EditReplay,
         KeyCode::Char('D') => InputOutcome::DiffReplay,

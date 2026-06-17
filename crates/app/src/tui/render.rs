@@ -70,6 +70,7 @@ fn render_normal_content(frame: &mut ratatui::Frame, area: Rect, app: &mut Workb
         WorkbenchView::Network => render_network_view(frame, area, app),
         WorkbenchView::Console => render_console(frame, area, app),
         WorkbenchView::WebSockets => render_websockets(frame, area, app),
+        WorkbenchView::Scripts => render_scripts(frame, area, app),
         WorkbenchView::Storage => render_storage(frame, area, app),
         WorkbenchView::Cookies => render_cookies(frame, area, app),
     }
@@ -93,6 +94,12 @@ fn render_view_rail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState
             "W",
             app.websocket_frames.len(),
             app.view == WorkbenchView::WebSockets,
+            false,
+        ),
+        rail_item(
+            "X",
+            app.scripts.len(),
+            app.view == WorkbenchView::Scripts,
             false,
         ),
         rail_item(
@@ -196,6 +203,7 @@ fn render_focused_layout(frame: &mut ratatui::Frame, area: Rect, app: &mut Workb
         FocusPane::Body => render_body(frame, area, app),
         FocusPane::Console => render_console(frame, area, app),
         FocusPane::WebSockets => render_websockets(frame, area, app),
+        FocusPane::Scripts => render_scripts(frame, area, app),
         FocusPane::Storage => render_storage(frame, area, app),
         FocusPane::Cookies => render_cookies(frame, area, app),
     }
@@ -253,12 +261,18 @@ fn view_tabs_line(app: &WorkbenchState) -> Line<'static> {
         Span::raw(" "),
         view_tab(
             "4",
+            format!("Scripts {}", app.scripts.len()),
+            app.view == WorkbenchView::Scripts,
+        ),
+        Span::raw(" "),
+        view_tab(
+            "5",
             format!("Storage {}", app.storage_events.len()),
             app.view == WorkbenchView::Storage,
         ),
         Span::raw(" "),
         view_tab(
-            "5",
+            "6",
             format!("Cookies {}", cookie_count(app)),
             app.view == WorkbenchView::Cookies,
         ),
@@ -1130,6 +1144,93 @@ fn direction_label(frame: &WebSocketFrameRecord) -> &'static str {
         WebSocketFrameDirection::Sent => "out",
         WebSocketFrameDirection::Received => "in",
     }
+}
+
+fn render_scripts(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(area);
+
+    frame.render_widget(
+        Paragraph::new(script_list_lines(app))
+            .block(panel_block(
+                format!("Scripts {}", app.scripts.len()),
+                app.focus == FocusPane::Scripts,
+            ))
+            .wrap(Wrap { trim: false }),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new(script_output_lines(app))
+            .block(panel_block("Output", app.focus == FocusPane::Scripts))
+            .wrap(Wrap { trim: false }),
+        chunks[1],
+    );
+}
+
+fn script_list_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
+    if app.scripts.is_empty() {
+        return vec![
+            Line::styled("no scripts yet", muted_style()),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("p", key_style()),
+                Span::raw(" command palette"),
+            ]),
+        ];
+    }
+
+    app.scripts
+        .iter()
+        .enumerate()
+        .map(|(index, script)| {
+            let selected = app.script_state.selected() == Some(index);
+            let style = if selected {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(GB_YELLOW)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(GB_FG)
+            };
+            Line::from(vec![
+                Span::styled(if selected { "> " } else { "  " }, muted_style()),
+                Span::styled(script.name.clone(), style),
+            ])
+        })
+        .collect()
+}
+
+fn script_output_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if let Some(script) = app.selected_script() {
+        lines.push(Line::from(vec![
+            Span::styled("script ", label_style()),
+            Span::raw(script.name.clone()),
+        ]));
+    }
+    if let Some(status) = &app.script_status {
+        lines.push(Line::from(vec![
+            Span::styled("status ", label_style()),
+            Span::raw(status.clone()),
+        ]));
+    }
+    if let Some(duration) = app.script_duration_ms {
+        lines.push(Line::from(vec![
+            Span::styled("duration ", label_style()),
+            Span::raw(format!("{duration}ms")),
+        ]));
+    }
+    if !lines.is_empty() {
+        lines.push(Line::raw(""));
+    }
+    if app.script_output.is_empty() {
+        lines.push(Line::styled("no output", muted_style()));
+    } else {
+        lines.extend(app.script_output.iter().map(|line| Line::raw(line.clone())));
+    }
+    lines
 }
 
 fn render_storage(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
@@ -3448,6 +3549,11 @@ mod tests {
             cookie_events: Vec::new(),
             cookie_snapshots: Vec::new(),
             cookie_selected: 0,
+            scripts: Vec::new(),
+            script_state: ListState::default(),
+            script_output: Vec::new(),
+            script_status: None,
+            script_duration_ms: None,
             table_state: TableState::default(),
             console_state: ListState::default(),
             view: WorkbenchView::Network,
@@ -3783,8 +3889,9 @@ mod tests {
         assert!(text.contains("1 Net"));
         assert!(text.contains("2 Console"));
         assert!(text.contains("3 WS"));
-        assert!(text.contains("4 Storage"));
-        assert!(text.contains("5 Cookies"));
+        assert!(text.contains("4 Scripts"));
+        assert!(text.contains("5 Storage"));
+        assert!(text.contains("6 Cookies"));
     }
 
     #[test]

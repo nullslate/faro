@@ -5,7 +5,7 @@ use faro_core::{
     ResponseRecord, Session, StorageEventRecord, StorageSnapshotRecord, UnixMillis,
     WebSocketFrameRecord, now_ms,
 };
-use faro_store::Store;
+use faro_store::{ScriptRecord, Store};
 use ratatui::widgets::{ListState, TableState};
 use regex::{Regex, RegexBuilder};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -41,6 +41,11 @@ pub(crate) struct WorkbenchState {
     pub(crate) cookie_events: Vec<CookieEventRecord>,
     pub(crate) cookie_snapshots: Vec<CookieSnapshotRecord>,
     pub(crate) cookie_selected: usize,
+    pub(crate) scripts: Vec<ScriptRecord>,
+    pub(crate) script_state: ListState,
+    pub(crate) script_output: Vec<String>,
+    pub(crate) script_status: Option<String>,
+    pub(crate) script_duration_ms: Option<u128>,
     pub(crate) table_state: TableState,
     pub(crate) console_state: ListState,
     pub(crate) view: WorkbenchView,
@@ -98,6 +103,7 @@ impl WorkbenchState {
         let mut storage_snapshots = Vec::new();
         let mut cookie_events = Vec::new();
         let mut cookie_snapshots = Vec::new();
+        let scripts = store.scripts()?;
         let session = select_session(store.sessions()?, target_url, active_session_id);
         let selected_session_id = session.as_ref().map(|session| session.id.clone());
         if let Some(session) = &session {
@@ -178,6 +184,11 @@ impl WorkbenchState {
             cookie_events,
             cookie_snapshots,
             cookie_selected: 0,
+            scripts,
+            script_state: ListState::default(),
+            script_output: Vec::new(),
+            script_status: None,
+            script_duration_ms: None,
             table_state,
             console_state,
             view: WorkbenchView::Network,
@@ -211,6 +222,9 @@ impl WorkbenchState {
             status_updated_at: Instant::now(),
         };
         state.apply_filter();
+        if !state.scripts.is_empty() {
+            state.script_state.select(Some(0));
+        }
         state.hydrate_selected_request();
         Ok(state)
     }
@@ -258,6 +272,12 @@ impl WorkbenchState {
             .min(self.current_storage_entries().len().saturating_sub(1));
         self.cookie_events = loaded.cookie_events;
         self.cookie_snapshots = loaded.cookie_snapshots;
+        let selected_script_id = self.selected_script().map(|script| script.id.clone());
+        self.scripts = loaded.scripts;
+        let selected_script = selected_script_id
+            .and_then(|id| self.scripts.iter().position(|script| script.id == id))
+            .or_else(|| (!self.scripts.is_empty()).then_some(0));
+        self.script_state.select(selected_script);
         self.cookie_selected = self
             .cookie_selected
             .min(self.current_cookie_entries().len().saturating_sub(1));
@@ -541,6 +561,7 @@ impl WorkbenchState {
             WorkbenchView::Network => FocusPane::Requests,
             WorkbenchView::Console => FocusPane::Console,
             WorkbenchView::WebSockets => FocusPane::WebSockets,
+            WorkbenchView::Scripts => FocusPane::Scripts,
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
@@ -554,6 +575,7 @@ impl WorkbenchState {
             },
             WorkbenchView::Console => FocusPane::Console,
             WorkbenchView::WebSockets => FocusPane::WebSockets,
+            WorkbenchView::Scripts => FocusPane::Scripts,
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
@@ -567,6 +589,7 @@ impl WorkbenchState {
             FocusPane::Body => self.scroll_down(),
             FocusPane::Console => self.next_console(),
             FocusPane::WebSockets => self.next_websocket_frame(),
+            FocusPane::Scripts => self.next_script(),
             FocusPane::Storage => self.next_storage_entry(),
             FocusPane::Cookies => self.next_cookie_entry(),
         }
@@ -580,6 +603,7 @@ impl WorkbenchState {
             FocusPane::Body => self.scroll_up(),
             FocusPane::Console => self.previous_console(),
             FocusPane::WebSockets => self.previous_websocket_frame(),
+            FocusPane::Scripts => self.previous_script(),
             FocusPane::Storage => self.previous_storage_entry(),
             FocusPane::Cookies => self.previous_cookie_entry(),
         }
@@ -594,6 +618,7 @@ impl WorkbenchState {
             },
             WorkbenchView::Console => FocusPane::Console,
             WorkbenchView::WebSockets => FocusPane::WebSockets,
+            WorkbenchView::Scripts => FocusPane::Scripts,
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
@@ -618,6 +643,7 @@ impl WorkbenchState {
             FocusPane::WebSockets => {
                 self.websocket_detail_scroll = self.websocket_detail_scroll.saturating_add(8)
             }
+            FocusPane::Scripts => self.next_script(),
             FocusPane::Storage => {
                 for _ in 0..4 {
                     self.next_storage_entry();
@@ -640,6 +666,7 @@ impl WorkbenchState {
             FocusPane::WebSockets => {
                 self.websocket_detail_scroll = self.websocket_detail_scroll.saturating_sub(8)
             }
+            FocusPane::Scripts => self.previous_script(),
             FocusPane::Storage => {
                 for _ in 0..4 {
                     self.previous_storage_entry();
@@ -679,6 +706,10 @@ impl WorkbenchState {
                 self.websocket_detail_scroll = 0;
                 self.websocket_state
                     .select((!self.filtered_websocket_indices.is_empty()).then_some(0));
+            }
+            FocusPane::Scripts => {
+                self.script_state
+                    .select((!self.scripts.is_empty()).then_some(0));
             }
         }
     }
@@ -723,6 +754,9 @@ impl WorkbenchState {
                         .then_some(self.filtered_websocket_indices.len() - 1),
                 );
             }
+            FocusPane::Scripts => self
+                .script_state
+                .select((!self.scripts.is_empty()).then_some(self.scripts.len() - 1)),
         }
     }
 
@@ -736,6 +770,7 @@ impl WorkbenchState {
                 self.request_filter.push(character);
                 self.apply_websocket_filter();
             }
+            WorkbenchView::Scripts => {}
             _ => {
                 self.request_filter.push(character);
                 self.apply_filter();
@@ -753,6 +788,7 @@ impl WorkbenchState {
                 self.request_filter.pop();
                 self.apply_websocket_filter();
             }
+            WorkbenchView::Scripts => {}
             _ => {
                 self.request_filter.pop();
                 self.apply_filter();
@@ -770,6 +806,7 @@ impl WorkbenchState {
                 self.request_filter.clear();
                 self.apply_websocket_filter();
             }
+            WorkbenchView::Scripts => {}
             _ => {
                 self.request_filter.clear();
                 self.sql_request_filter_ids = None;
@@ -899,6 +936,28 @@ impl WorkbenchState {
         };
         self.websocket_state.select(Some(previous));
         self.websocket_detail_scroll = 0;
+    }
+
+    fn next_script(&mut self) {
+        if self.scripts.is_empty() {
+            return;
+        }
+        let next = match self.script_state.selected() {
+            Some(index) if index + 1 < self.scripts.len() => index + 1,
+            _ => 0,
+        };
+        self.script_state.select(Some(next));
+    }
+
+    fn previous_script(&mut self) {
+        if self.scripts.is_empty() {
+            return;
+        }
+        let previous = match self.script_state.selected() {
+            Some(0) | None => self.scripts.len() - 1,
+            Some(index) => index - 1,
+        };
+        self.script_state.select(Some(previous));
     }
 
     fn next_storage_entry(&mut self) {
@@ -1082,6 +1141,12 @@ impl WorkbenchState {
         self.current_cookie_entries()
             .get(self.cookie_selected)
             .cloned()
+    }
+
+    pub(crate) fn selected_script(&self) -> Option<&ScriptRecord> {
+        self.script_state
+            .selected()
+            .and_then(|index| self.scripts.get(index))
     }
 
     fn apply_filter(&mut self) {
@@ -1679,6 +1744,7 @@ pub(crate) enum FocusPane {
     Body,
     Console,
     WebSockets,
+    Scripts,
     Storage,
     Cookies,
 }
@@ -1688,6 +1754,7 @@ pub(crate) enum WorkbenchView {
     Network,
     Console,
     WebSockets,
+    Scripts,
     Storage,
     Cookies,
 }
@@ -1698,6 +1765,7 @@ impl WorkbenchView {
             Self::Network => "network",
             Self::Console => "console",
             Self::WebSockets => "websockets",
+            Self::Scripts => "scripts",
             Self::Storage => "storage",
             Self::Cookies => "cookies",
         }
@@ -1712,6 +1780,7 @@ impl FocusPane {
             Self::Body => "body",
             Self::Console => "console",
             Self::WebSockets => "websockets",
+            Self::Scripts => "scripts",
             Self::Storage => "storage",
             Self::Cookies => "cookies",
         }
@@ -1723,6 +1792,7 @@ impl FocusPane {
             "body" => Self::Body,
             "console" => Self::Console,
             "websockets" => Self::WebSockets,
+            "scripts" => Self::Scripts,
             "storage" => Self::Storage,
             "cookies" => Self::Cookies,
             _ => Self::Requests,
@@ -1891,6 +1961,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "View: WebSockets",
         hint: "ws frames streaming realtime",
         command: PaletteCommand::View(WorkbenchView::WebSockets),
+    },
+    PaletteEntry {
+        title: "View: Scripts",
+        hint: "script workflows rhai javascript",
+        command: PaletteCommand::View(WorkbenchView::Scripts),
     },
     PaletteEntry {
         title: "View: Storage",

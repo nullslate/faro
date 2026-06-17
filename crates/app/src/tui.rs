@@ -1,6 +1,7 @@
 mod input;
 mod layout;
 mod render;
+mod scripts;
 mod state;
 
 use crate::config::AppConfig;
@@ -146,6 +147,7 @@ fn run_loop(
                         InputOutcome::DiffReplay => diff_selected_replay(terminal, app)?,
                         InputOutcome::RefreshPage => refresh_page(app),
                         InputOutcome::SqlQuery => edit_sql_query(terminal, app)?,
+                        InputOutcome::RunScript => run_selected_script(app),
                     }
                     if outcome != InputOutcome::ToggleMaximize
                         && app.layout_mode == layout::LayoutMode::Focused
@@ -240,6 +242,7 @@ fn handle_mouse_click_focused(app: &mut WorkbenchState, mouse: MouseEvent, area:
         state::FocusPane::Body => app.set_focus(state::FocusPane::Body),
         state::FocusPane::Console => app.set_focus(state::FocusPane::Console),
         state::FocusPane::WebSockets => select_websocket_from_mouse(app, mouse, area),
+        state::FocusPane::Scripts => app.set_focus(state::FocusPane::Scripts),
         state::FocusPane::Storage => select_storage_from_mouse(app, mouse, area),
         state::FocusPane::Cookies => select_cookie_from_mouse(app, mouse, area),
     }
@@ -250,6 +253,7 @@ fn handle_content_click(app: &mut WorkbenchState, mouse: MouseEvent, area: Rect)
         state::WorkbenchView::Network => handle_network_click(app, mouse, area),
         state::WorkbenchView::Console => app.set_focus(state::FocusPane::Console),
         state::WorkbenchView::WebSockets => select_websocket_from_mouse(app, mouse, area),
+        state::WorkbenchView::Scripts => app.set_focus(state::FocusPane::Scripts),
         state::WorkbenchView::Storage => select_storage_from_mouse(app, mouse, area),
         state::WorkbenchView::Cookies => select_cookie_from_mouse(app, mouse, area),
     }
@@ -261,8 +265,9 @@ fn handle_rail_click(app: &mut WorkbenchState, mouse: MouseEvent, area: Rect) {
         0 => app.set_view(state::WorkbenchView::Network),
         1 => app.set_view(state::WorkbenchView::Console),
         2 => app.set_view(state::WorkbenchView::WebSockets),
-        3 => app.set_view(state::WorkbenchView::Storage),
-        4 => app.set_view(state::WorkbenchView::Cookies),
+        3 => app.set_view(state::WorkbenchView::Scripts),
+        4 => app.set_view(state::WorkbenchView::Storage),
+        5 => app.set_view(state::WorkbenchView::Cookies),
         _ => {}
     }
 }
@@ -450,6 +455,60 @@ fn copy_curl(app: &mut WorkbenchState) {
                     format!("clipboard unavailable ({error}); temp write failed: {write_error}")
             }
         },
+    }
+}
+
+fn run_selected_script(app: &mut WorkbenchState) {
+    let Some(script) = app.selected_script().cloned() else {
+        app.status = "no script selected".to_string();
+        return;
+    };
+
+    match scripts::execute(app, &script.body) {
+        Ok(result) => {
+            app.script_output = result.output;
+            app.script_duration_ms = Some(result.duration_ms);
+            app.script_status = Some(if result.success {
+                "success".to_string()
+            } else {
+                result
+                    .error
+                    .map(|error| format!("failed: {error}"))
+                    .unwrap_or_else(|| "failed".to_string())
+            });
+            if result.success {
+                let ran_at = faro_core::now_ms();
+                let mark_result = Store::open(&app.db_path)
+                    .with_context(|| format!("open database {}", app.db_path.display()))
+                    .and_then(|store| {
+                        store
+                            .mark_script_run(&script.id, ran_at)
+                            .context("mark script run")
+                    });
+                match mark_result {
+                    Ok(()) => {
+                        if let Some(current) = app
+                            .scripts
+                            .iter_mut()
+                            .find(|candidate| candidate.id == script.id)
+                        {
+                            current.last_run_at = Some(ran_at);
+                        }
+                    }
+                    Err(error) => {
+                        app.status = format!("script ran; last-run save failed: {error}");
+                        return;
+                    }
+                }
+            }
+            app.status = format!("script {} in {}ms", script.name, result.duration_ms);
+        }
+        Err(error) => {
+            app.script_output = vec![format!("error: {error}")];
+            app.script_duration_ms = None;
+            app.script_status = Some("failed".to_string());
+            app.status = format!("script failed: {error}");
+        }
     }
 }
 

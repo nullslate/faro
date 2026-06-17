@@ -14,6 +14,7 @@ faro-core = { path = "../core" }
 faro-store = { path = "../store" }
 ratatui.workspace = true
 regex.workspace = true
+rhai = "1.25.1"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -2,6 +2,7 @@ use faro_core::{
     BodyRecord, ConsoleLevel, ConsoleLog, CookieEventRecord, CookieSnapshotRecord, EventEnvelope,
     Header, Id, ReplayRecord, RequestRecord, RequestStatus, ResponseRecord, Run, Session,
     StorageEventRecord, StorageSnapshotRecord, Tab, WebSocketFrameDirection, WebSocketFrameRecord,
+    new_id, now_ms,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, params,
@@ -25,6 +26,30 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 
 pub struct Store {
     conn: Connection,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScriptRecord {
+    pub id: String,
+    pub name: String,
+    pub body: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub last_run_at: Option<i64>,
+}
+
+impl ScriptRecord {
+    pub fn new(name: impl Into<String>, body: impl Into<String>) -> Self {
+        let now = now_ms();
+        Self {
+            id: new_id(),
+            name: name.into(),
+            body: body.into(),
+            created_at: now,
+            updated_at: now,
+            last_run_at: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -560,6 +585,86 @@ impl Store {
                 if frame.mask { 1 } else { 0 },
                 frame.payload
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn scripts(&self) -> Result<Vec<ScriptRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, body, created_at, updated_at, last_run_at
+             FROM scripts
+             ORDER BY updated_at DESC, name ASC",
+        )?;
+        let scripts = stmt
+            .query_map([], |row| {
+                Ok(ScriptRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    body: row.get(2)?,
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                    last_run_at: row.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(scripts)
+    }
+
+    pub fn script(&self, id: &str) -> Result<Option<ScriptRecord>> {
+        self.conn
+            .query_row(
+                "SELECT id, name, body, created_at, updated_at, last_run_at
+                 FROM scripts
+                 WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(ScriptRecord {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        body: row.get(2)?,
+                        created_at: row.get(3)?,
+                        updated_at: row.get(4)?,
+                        last_run_at: row.get(5)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(StoreError::from)
+    }
+
+    pub fn save_script(&self, script: &ScriptRecord) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO scripts (id, name, body, created_at, updated_at, last_run_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                body = excluded.body,
+                updated_at = excluded.updated_at,
+                last_run_at = excluded.last_run_at",
+            params![
+                script.id,
+                script.name,
+                script.body,
+                script.created_at,
+                script.updated_at,
+                script.last_run_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_script(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM scripts WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn mark_script_run(&self, id: &str, ts: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scripts
+             SET last_run_at = ?2, updated_at = updated_at
+             WHERE id = ?1",
+            params![id, ts],
         )?;
         Ok(())
     }
@@ -1295,6 +1400,17 @@ CREATE TABLE IF NOT EXISTS websocket_frames (
 
 CREATE INDEX IF NOT EXISTS idx_websocket_frames_session_ts ON websocket_frames(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_websocket_frames_request_ts ON websocket_frames(browser_request_id, ts);
+
+CREATE TABLE IF NOT EXISTS scripts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_run_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_scripts_updated ON scripts(updated_at DESC, name ASC);
 "#;
 
 #[cfg(test)]
