@@ -24,6 +24,8 @@ pub(crate) struct WorkbenchState {
     pub(crate) request_tree_metas: Vec<RequestTreeMeta>,
     pub(crate) filtered_request_indices: Vec<usize>,
     pub(crate) collapsed_request_groups: HashSet<String>,
+    pub(crate) active_request_route_group: Option<String>,
+    pub(crate) sql_request_filter_ids: Option<HashSet<String>>,
     pub(crate) console_logs: Vec<ConsoleLog>,
     pub(crate) filtered_console_indices: Vec<usize>,
     pub(crate) console_hidden_before: Option<UnixMillis>,
@@ -55,6 +57,10 @@ pub(crate) struct WorkbenchState {
     pub(crate) palette_query: String,
     pub(crate) palette_selected: usize,
     pub(crate) show_help: bool,
+    pub(crate) sql_result: Option<SqlResultsView>,
+    pub(crate) sql_row_scroll: usize,
+    pub(crate) sql_col_scroll: usize,
+    pub(crate) last_sql_query: String,
     pub(crate) request_filter: String,
     pub(crate) console_filter: String,
     pub(crate) cdp_websocket_url: Option<String>,
@@ -143,6 +149,8 @@ impl WorkbenchState {
             request_tree_metas,
             filtered_request_indices,
             collapsed_request_groups: HashSet::new(),
+            active_request_route_group: None,
+            sql_request_filter_ids: None,
             console_logs,
             filtered_console_indices,
             console_hidden_before: None,
@@ -174,6 +182,10 @@ impl WorkbenchState {
             palette_query: String::new(),
             palette_selected: 0,
             show_help: false,
+            sql_result: None,
+            sql_row_scroll: 0,
+            sql_col_scroll: 0,
+            last_sql_query: String::new(),
             request_filter: initial_request_filter,
             console_filter: String::new(),
             cdp_websocket_url: None,
@@ -194,6 +206,7 @@ impl WorkbenchState {
             .selected_request()
             .map(|request| request.request.id.clone());
         let collapsed_request_groups = self.collapsed_request_groups.clone();
+        let active_request_route_group = self.active_request_route_group.clone();
         let store = Store::open(&self.db_path)
             .with_context(|| format!("open database {}", self.db_path.display()))?;
         let loaded = Self::load_for_session(
@@ -208,6 +221,7 @@ impl WorkbenchState {
         self.requests = loaded.requests;
         self.request_tree_metas = loaded.request_tree_metas;
         self.collapsed_request_groups = collapsed_request_groups;
+        self.active_request_route_group = active_request_route_group;
         self.console_logs = loaded.console_logs;
         if let Some(hidden_before) = self.console_hidden_before {
             self.console_logs.retain(|log| log.ts > hidden_before);
@@ -259,6 +273,71 @@ impl WorkbenchState {
 
     pub(crate) fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub(crate) fn apply_sql_request_filter(&mut self, query: String, ids: HashSet<String>) {
+        let count = ids.len();
+        self.last_sql_query = query;
+        self.sql_request_filter_ids = Some(ids);
+        self.sql_result = None;
+        self.set_view(WorkbenchView::Network);
+        self.apply_filter();
+        self.status = format!("SQL filtered requests to {count} ids");
+    }
+
+    pub(crate) fn show_sql_error(&mut self, query: String, error: String) {
+        self.sql_result = Some(SqlResultsView {
+            query,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            duration_ms: 0,
+            error: Some(error.clone()),
+        });
+        self.sql_row_scroll = 0;
+        self.sql_col_scroll = 0;
+        self.status = format!("SQL failed: {error}");
+    }
+
+    pub(crate) fn close_sql_result(&mut self) {
+        self.sql_result = None;
+        self.sql_row_scroll = 0;
+        self.sql_col_scroll = 0;
+    }
+
+    pub(crate) fn scroll_sql_rows_down(&mut self) {
+        if let Some(result) = &self.sql_result {
+            self.sql_row_scroll = self
+                .sql_row_scroll
+                .saturating_add(1)
+                .min(result.rows.len().saturating_sub(1));
+        }
+    }
+
+    pub(crate) fn scroll_sql_rows_up(&mut self) {
+        self.sql_row_scroll = self.sql_row_scroll.saturating_sub(1);
+    }
+
+    pub(crate) fn scroll_sql_columns_right(&mut self) {
+        if let Some(result) = &self.sql_result {
+            self.sql_col_scroll = self
+                .sql_col_scroll
+                .saturating_add(1)
+                .min(result.columns.len().saturating_sub(1));
+        }
+    }
+
+    pub(crate) fn scroll_sql_columns_left(&mut self) {
+        self.sql_col_scroll = self.sql_col_scroll.saturating_sub(1);
+    }
+
+    pub(crate) fn scroll_sql_top(&mut self) {
+        self.sql_row_scroll = 0;
+    }
+
+    pub(crate) fn scroll_sql_bottom(&mut self) {
+        if let Some(result) = &self.sql_result {
+            self.sql_row_scroll = result.rows.len().saturating_sub(1);
+        }
     }
 
     pub(crate) fn open_palette(&mut self) {
@@ -371,6 +450,37 @@ impl WorkbenchState {
         }
     }
 
+    pub(crate) fn enter_selected_request_group(&mut self) {
+        let Some(request_index) = self
+            .table_state
+            .selected()
+            .and_then(|index| self.filtered_request_indices.get(index))
+            .copied()
+        else {
+            return;
+        };
+        let Some(group) = self.collapsible_group_key_for_request_index(request_index) else {
+            self.status = "no collapsible request branch".to_string();
+            return;
+        };
+        self.collapsed_request_groups.remove(&group);
+        self.active_request_route_group = Some(group.clone());
+        self.status = format!(
+            "entered {}; backspace to go up",
+            route_label_for_group(&group)
+        );
+        self.apply_filter();
+    }
+
+    pub(crate) fn leave_request_route_group(&mut self) {
+        let Some(group) = self.active_request_route_group.take() else {
+            self.status = "already at request root".to_string();
+            return;
+        };
+        self.status = format!("left {}", route_label_for_group(&group));
+        self.apply_filter();
+    }
+
     pub(crate) fn toggle_selected_request_group(&mut self) {
         let Some(request_index) = self
             .table_state
@@ -388,6 +498,9 @@ impl WorkbenchState {
             self.status = format!("expanded {}", group_label(&group));
         } else {
             self.collapsed_request_groups.insert(group.clone());
+            if self.active_request_route_group.as_deref() == Some(group.as_str()) {
+                self.active_request_route_group = None;
+            }
             self.status = format!("collapsed {}", group_label(&group));
         }
         self.apply_filter();
@@ -595,6 +708,7 @@ impl WorkbenchState {
             }
             _ => {
                 self.request_filter.clear();
+                self.sql_request_filter_ids = None;
                 self.apply_filter();
             }
         }
@@ -882,8 +996,16 @@ impl WorkbenchState {
             .iter()
             .enumerate()
             .filter_map(|(index, request)| {
-                (filter.matches(request) && !self.request_hidden_by_collapsed_group(index))
-                    .then_some(index)
+                let sql_matches = self
+                    .sql_request_filter_ids
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&request.request.id));
+                let route_matches = self.request_in_active_route(index);
+                (sql_matches
+                    && route_matches
+                    && filter.matches(request)
+                    && !self.request_hidden_by_collapsed_group(index))
+                .then_some(index)
             })
             .collect();
         let sort_mode = self.sort_mode;
@@ -995,6 +1117,16 @@ impl WorkbenchState {
             .unwrap_or(false)
     }
 
+    fn request_in_active_route(&self, request_index: usize) -> bool {
+        let Some(active_group) = &self.active_request_route_group else {
+            return true;
+        };
+        self.request_tree_metas
+            .get(request_index)
+            .map(|meta| meta.ancestor_keys.iter().any(|key| key == active_group))
+            .unwrap_or(false)
+    }
+
     fn collapsible_group_key_for_request_index(&self, request_index: usize) -> Option<String> {
         let meta = self.request_tree_metas.get(request_index)?;
         meta.group_key
@@ -1019,6 +1151,29 @@ impl WorkbenchState {
             .map(|key| self.collapsed_request_groups.contains(key))
             .unwrap_or(false);
         Some(meta)
+    }
+
+    pub(crate) fn active_expanded_request_group(&self) -> Option<String> {
+        self.active_request_route_group.clone()
+    }
+
+    pub(crate) fn active_expanded_request_route(&self) -> Option<String> {
+        self.active_expanded_request_group()
+            .map(|group| route_label_for_group(&group))
+    }
+
+    pub(crate) fn request_route_remainder(&self, request_index: usize) -> Option<String> {
+        let active_group = self.active_expanded_request_group()?;
+        let meta = self.request_tree_metas.get(request_index)?;
+        let in_active_group = meta.ancestor_keys.iter().any(|key| key == &active_group);
+        if !in_active_group {
+            return None;
+        }
+        let raw_path = path_for_url(&self.requests.get(request_index)?.request.url);
+        Some(strip_route_segments(
+            &raw_path,
+            group_path_segment_count(&active_group),
+        ))
     }
 
     fn filtered_index_for_console_id(&self, log_id: &str) -> Option<usize> {
@@ -1499,6 +1654,7 @@ pub(crate) enum PaletteCommand {
     DiffReplay,
     OpenEditor,
     EditConsole,
+    SqlQuery,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1670,6 +1826,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         command: PaletteCommand::EditConsole,
     },
     PaletteEntry {
+        title: "SQL Query",
+        hint: "read-only sqlite workbench database",
+        command: PaletteCommand::SqlQuery,
+    },
+    PaletteEntry {
         title: "Show Keys",
         hint: "help modal shortcuts",
         command: PaletteCommand::ToggleHelp,
@@ -1685,6 +1846,15 @@ fn palette_matches(entry: &PaletteEntry, query: &str) -> bool {
     query
         .split_whitespace()
         .all(|part| fuzzy_contains(&haystack, part))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SqlResultsView {
+    pub(crate) query: String,
+    pub(crate) columns: Vec<String>,
+    pub(crate) rows: Vec<Vec<String>>,
+    pub(crate) duration_ms: u128,
+    pub(crate) error: Option<String>,
 }
 
 fn fuzzy_contains(haystack: &str, needle: &str) -> bool {
@@ -2798,6 +2968,41 @@ fn group_label(group_key: &str) -> String {
         .unwrap_or_else(|| group_key.to_string())
 }
 
+fn route_label_for_group(group_key: &str) -> String {
+    let mut parts = group_key.split('/');
+    let Some(domain) = parts.next() else {
+        return group_key.to_string();
+    };
+    let path = parts.collect::<Vec<_>>().join("/");
+    if path.is_empty() {
+        domain.to_string()
+    } else {
+        format!("{domain}/{path}")
+    }
+}
+
+fn group_path_segment_count(group_key: &str) -> usize {
+    group_key.split('/').skip(1).count()
+}
+
+fn strip_route_segments(path: &str, segment_count: usize) -> String {
+    if segment_count == 0 {
+        return path.to_string();
+    }
+    let (path_only, suffix) = path
+        .find(['?', '#'])
+        .map(|index| (&path[..index], &path[index..]))
+        .unwrap_or((path, ""));
+    let segments = path_only
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() <= segment_count {
+        return format!("/{suffix}");
+    }
+    format!("/{}{}", segments[segment_count..].join("/"), suffix)
+}
+
 fn extension_for_mime(mime: &str) -> &'static str {
     if mime.contains("json") {
         "json"
@@ -2933,5 +3138,24 @@ mod tests {
         assert!(ConsoleFilter::parse("level:error token").matches(&error_log));
         assert!(!ConsoleFilter::parse("level:warn").matches(&error_log));
         assert!(!ConsoleFilter::parse("kind:page").matches(&eval_log));
+    }
+
+    #[test]
+    fn strips_expanded_route_segments_from_request_paths() {
+        assert_eq!(
+            strip_route_segments("/api/users/123/details?tab=profile", 3),
+            "/details?tab=profile"
+        );
+        assert_eq!(strip_route_segments("/api/users/123", 3), "/");
+        assert_eq!(strip_route_segments("/api/users", 1), "/users");
+    }
+
+    #[test]
+    fn labels_expanded_route_with_domain_and_normalized_path() {
+        assert_eq!(
+            route_label_for_group("localhost:5173/api/users/:id"),
+            "localhost:5173/api/users/:id"
+        );
+        assert_eq!(group_path_segment_count("localhost:5173/api/users/:id"), 3);
     }
 }

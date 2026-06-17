@@ -41,6 +41,9 @@ pub(crate) fn render(frame: &mut ratatui::Frame, app: &mut WorkbenchState) {
         LayoutMode::Focused => render_focused_layout(frame, root[1], app),
     }
     render_status(frame, root[2], app);
+    if app.sql_result.is_some() {
+        render_sql_results_modal(frame, app);
+    }
     if app.input_mode == InputMode::Palette {
         render_palette_modal(frame, app);
     }
@@ -381,6 +384,19 @@ fn render_network_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
         )),
         Span::styled("   density ", muted_style()),
         Span::raw(app.density_mode.label()),
+        Span::styled("   sql ", muted_style()),
+        Span::raw(
+            app.sql_request_filter_ids
+                .as_ref()
+                .map(|ids| ids.len().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        Span::styled("   route ", muted_style()),
+        Span::raw(
+            app.active_expanded_request_route()
+                .map(|route| compact_value(&route, 48))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
     ]);
     frame.render_widget(Paragraph::new(line).style(Style::default().fg(GB_FG)), area);
 }
@@ -397,6 +413,19 @@ fn render_network_compact_bar(frame: &mut ratatui::Frame, area: Rect, app: &Work
         }),
         Span::styled("  preset ", muted_style()),
         Span::raw(app.active_filter_preset_label().unwrap_or("-")),
+        Span::styled("  sql ", muted_style()),
+        Span::raw(
+            app.sql_request_filter_ids
+                .as_ref()
+                .map(|ids| ids.len().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        Span::styled("  route ", muted_style()),
+        Span::raw(
+            app.active_expanded_request_route()
+                .map(|route| compact_value(&route, 36))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
         Span::raw("  "),
     ];
     spans.append(&mut traffic_line.spans);
@@ -508,7 +537,9 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                     .unwrap_or_else(|| "-".to_string());
                 let tree_meta = app.request_tree_meta(*index);
                 let domain = domain_for_url(&request.request.url);
-                let path = path_for_url(&request.request.url);
+                let path = app
+                    .request_route_remainder(*index)
+                    .unwrap_or_else(|| path_for_url(&request.request.url));
                 let fade = bottom_overlay_fade(
                     row_index,
                     offset,
@@ -991,6 +1022,13 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         Span::styled("density ", label_style()),
         Span::raw(app.density_mode.label()),
     ]);
+    if let Some(ids) = &app.sql_request_filter_ids {
+        status_spans.extend([
+            Span::raw("  "),
+            Span::styled("sql ", label_style()),
+            Span::raw(format!("{} ids", ids.len())),
+        ]);
+    }
     match app.view {
         WorkbenchView::Console => {
             if !app.console_filter.is_empty() {
@@ -1055,6 +1093,12 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw(" sort  "),
             Span::styled("f", key_style()),
             Span::raw(" preset  "),
+            Span::styled("enter", key_style()),
+            Span::raw(" enter route  "),
+            Span::styled("space", key_style()),
+            Span::raw(" collapse  "),
+            Span::styled("backspace", key_style()),
+            Span::raw(" up  "),
             Span::styled("c", key_style()),
             Span::raw(" clear filter"),
         ]),
@@ -1224,6 +1268,196 @@ fn render_palette_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
     );
 }
 
+fn render_sql_results_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
+    let frame_area = frame.area();
+    let width = frame_area.width.saturating_sub(8).clamp(48, 128);
+    let height = frame_area.height.saturating_sub(4).clamp(14, 34);
+    let area = centered_rect(frame_area, width, height);
+    let Some(result) = &app.sql_result else {
+        return;
+    };
+
+    frame.render_widget(Clear, area);
+    if let Some(error) = &result.error {
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("error ", label_style()),
+                Span::styled(error.clone(), warning_style()),
+            ]),
+            Line::raw(""),
+            Line::styled("query", label_style()),
+            Line::raw(compact_value(&result.query.replace('\n', " "), 180)),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("esc", key_style()),
+                Span::raw(" close  "),
+                Span::styled("p", key_style()),
+                Span::raw(" palette"),
+            ]),
+        ];
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(panel_block("SQL Results", true))
+                .style(Style::default().fg(GB_FG))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let summary = vec![
+        Line::from(vec![
+            Span::styled("rows ", label_style()),
+            Span::raw(result.rows.len().to_string()),
+            Span::styled("  columns ", label_style()),
+            Span::raw(result.columns.len().to_string()),
+            Span::styled("  duration ", label_style()),
+            Span::raw(format!("{}ms", result.duration_ms)),
+            Span::styled("  row ", label_style()),
+            Span::raw(format!(
+                "{}",
+                app.sql_row_scroll
+                    .saturating_add(1)
+                    .min(result.rows.len().max(1))
+            )),
+            Span::styled("  col ", label_style()),
+            Span::raw(format!(
+                "{}",
+                app.sql_col_scroll
+                    .saturating_add(1)
+                    .min(result.columns.len().max(1))
+            )),
+        ]),
+        Line::from(vec![
+            Span::styled("query ", label_style()),
+            Span::raw(compact_value(&result.query.replace('\n', " "), 180)),
+        ]),
+    ];
+    frame.render_widget(
+        Paragraph::new(summary)
+            .block(panel_block("SQL Results", true))
+            .style(Style::default().fg(GB_FG)),
+        chunks[0],
+    );
+
+    let visible_columns = visible_sql_columns(result, app.sql_col_scroll, chunks[1].width);
+    let widths = visible_columns
+        .iter()
+        .map(|(_, width)| Constraint::Length(*width))
+        .collect::<Vec<_>>();
+    let header = Row::new(
+        visible_columns
+            .iter()
+            .map(|(index, _)| {
+                Cell::from(
+                    result
+                        .columns
+                        .get(*index)
+                        .cloned()
+                        .unwrap_or_else(|| "-".to_string()),
+                )
+            })
+            .collect::<Vec<_>>(),
+    )
+    .style(muted_style().add_modifier(Modifier::BOLD));
+    let visible_rows = chunks[1].height.saturating_sub(3).max(1) as usize;
+    let rows = result
+        .rows
+        .iter()
+        .skip(app.sql_row_scroll)
+        .take(visible_rows)
+        .map(|row| {
+            Row::new(
+                visible_columns
+                    .iter()
+                    .map(|(index, width)| {
+                        Cell::from(
+                            row.get(*index)
+                                .map(|value| compact_value(value, width.saturating_sub(1) as usize))
+                                .unwrap_or_default(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Table::new(rows, widths)
+            .header(header)
+            .block(panel_block("Rows", false))
+            .style(Style::default().fg(GB_FG)),
+        chunks[1],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("j/k", key_style()),
+            Span::raw(" rows  "),
+            Span::styled("h/l", key_style()),
+            Span::raw(" columns  "),
+            Span::styled("g/G", key_style()),
+            Span::raw(" top/bottom  "),
+            Span::styled("esc", key_style()),
+            Span::raw(" close  "),
+            Span::styled("p", key_style()),
+            Span::raw(" palette"),
+        ]))
+        .style(Style::default().fg(GB_FG)),
+        chunks[2],
+    );
+}
+
+fn visible_sql_columns(
+    result: &super::state::SqlResultsView,
+    column_scroll: usize,
+    area_width: u16,
+) -> Vec<(usize, u16)> {
+    if result.columns.is_empty() {
+        return vec![(0, area_width.saturating_sub(4).max(8))];
+    }
+
+    let mut used_width = 0_u16;
+    let mut visible = Vec::new();
+    let available_width = area_width.saturating_sub(4).max(8);
+    for index in column_scroll.min(result.columns.len())..result.columns.len() {
+        let width = sql_column_width(result, index);
+        if !visible.is_empty() && used_width.saturating_add(width) > available_width {
+            break;
+        }
+        used_width = used_width.saturating_add(width);
+        visible.push((index, width));
+    }
+    if visible.is_empty() {
+        let index = column_scroll.min(result.columns.len().saturating_sub(1));
+        visible.push((index, sql_column_width(result, index).min(available_width)));
+    }
+    visible
+}
+
+fn sql_column_width(result: &super::state::SqlResultsView, index: usize) -> u16 {
+    let header_width = result
+        .columns
+        .get(index)
+        .map(|column| column.len())
+        .unwrap_or_default();
+    let value_width = result
+        .rows
+        .iter()
+        .filter_map(|row| row.get(index))
+        .take(80)
+        .map(|value| value.len())
+        .max()
+        .unwrap_or_default();
+    header_width.max(value_width).clamp(8, 34) as u16
+}
+
 fn active_filter_text(app: &WorkbenchState) -> String {
     match app.view {
         WorkbenchView::Console if !app.console_filter.is_empty() => app.console_filter.clone(),
@@ -1275,6 +1509,10 @@ fn compact_help_line() -> Line<'static> {
         Span::raw(" views  "),
         Span::styled("R/D/B", key_style()),
         Span::raw(" panes  "),
+        Span::styled("enter", key_style()),
+        Span::raw(" route  "),
+        Span::styled("backspace", key_style()),
+        Span::raw(" up  "),
         Span::styled("j/k", key_style()),
         Span::raw(" move  "),
         Span::styled("F5", key_style()),
@@ -1489,11 +1727,16 @@ fn segment_bar(count: usize, total: usize, width: usize, color: Color) -> Vec<Sp
 }
 
 fn requests_title(app: &WorkbenchState) -> String {
+    let sql_filter = app
+        .sql_request_filter_ids
+        .as_ref()
+        .map(|ids| format!(" sql:{}", ids.len()))
+        .unwrap_or_default();
     if app.request_filter.is_empty() {
-        " Requests ".to_string()
+        format!(" Requests{sql_filter} ")
     } else {
         format!(
-            " Requests /{} ({}/{}) ",
+            " Requests{sql_filter} /{} ({}/{}) ",
             app.request_filter,
             app.filtered_request_indices.len(),
             app.requests.len()
@@ -2668,6 +2911,8 @@ mod tests {
             request_tree_metas: Vec::new(),
             filtered_request_indices: Vec::new(),
             collapsed_request_groups: std::collections::HashSet::new(),
+            active_request_route_group: None,
+            sql_request_filter_ids: None,
             console_logs: Vec::new(),
             filtered_console_indices: Vec::new(),
             console_hidden_before: None,
@@ -2699,6 +2944,10 @@ mod tests {
             palette_query: String::new(),
             palette_selected: 0,
             show_help: false,
+            sql_result: None,
+            sql_row_scroll: 0,
+            sql_col_scroll: 0,
+            last_sql_query: String::new(),
             request_filter: String::new(),
             console_filter: String::new(),
             cdp_websocket_url: None,
