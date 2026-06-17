@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "devbench": {
+      "command": "devbench",
+      "args": ["mcp"]
+    }
+  }
+}

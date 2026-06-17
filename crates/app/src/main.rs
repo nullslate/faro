@@ -1,4 +1,5 @@
 mod config;
+mod mcp;
 mod tui;
 
 use anyhow::{Context, bail};
@@ -27,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     match args.remove(0).as_str() {
+        "mcp" => mcp::run(options),
         "capture" => handle_capture(options, args),
         "requests" => handle_requests(&options.db_path, args),
         "request" => handle_request(&options.db_path, args),
@@ -1291,6 +1293,7 @@ fn print_help() {
     println!("  devbench [--db <db-path>] [--cdp-port <port>] <http-url>");
     println!("  devbench [--db <db-path>] --attach-port <port> <http-url>");
     println!("  devbench [--db <db-path>] --launch-on-start <http-url>");
+    println!("  devbench mcp");
     println!("  devbench capture <http-url> [--for <duration>] [--json]");
     println!("  devbench tui [db-path]");
     println!("  devbench show [db-path]");
