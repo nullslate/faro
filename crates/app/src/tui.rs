@@ -18,7 +18,7 @@ use faro_core::{
     ConsoleLevel, ConsoleLog, CookieEventRecord, ReplayRecord, StorageEventRecord, console_event,
     cookie_event_observed_event, request_replayed_event, storage_changed_event,
 };
-use faro_store::{Store, inline_text_body};
+use faro_store::{ScriptRecord, Store, inline_text_body};
 use input::{InputOutcome, handle_key};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -147,7 +147,12 @@ fn run_loop(
                         InputOutcome::DiffReplay => diff_selected_replay(terminal, app)?,
                         InputOutcome::RefreshPage => refresh_page(app),
                         InputOutcome::SqlQuery => edit_sql_query(terminal, app)?,
+                        InputOutcome::CreateScript => create_script(terminal, app)?,
+                        InputOutcome::EditScript => edit_selected_script(terminal, app)?,
                         InputOutcome::RunScript => run_selected_script(app),
+                        InputOutcome::DuplicateScript => duplicate_selected_script(app),
+                        InputOutcome::RenameScript => rename_selected_script(terminal, app)?,
+                        InputOutcome::DeleteScript => delete_selected_script(app),
                     }
                     if outcome != InputOutcome::ToggleMaximize
                         && app.layout_mode == layout::LayoutMode::Focused
@@ -458,6 +463,54 @@ fn copy_curl(app: &mut WorkbenchState) {
     }
 }
 
+fn create_script(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut WorkbenchState,
+) -> anyhow::Result<()> {
+    app.set_view(WorkbenchView::Scripts);
+    let body = default_script_body();
+    let path = write_temp_file("faro-script-new", "rhai", &body).context("write script file")?;
+    run_editor(terminal, app, &path).context("run editor for new script")?;
+    let body = read_script_body(&path)?;
+    if body.trim().is_empty() {
+        app.status = "script create skipped: empty file".to_string();
+        return Ok(());
+    }
+    let name = script_name_from_body(&body).unwrap_or_else(|| next_script_name(app));
+    let script = ScriptRecord::new(name, body);
+    let script_id = script.id.clone();
+    save_script_record(app, &script).context("save new script")?;
+    app.reload().context("reload after script create")?;
+    app.select_script_by_id(&script_id);
+    app.status = "created script".to_string();
+    Ok(())
+}
+
+fn edit_selected_script(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut WorkbenchState,
+) -> anyhow::Result<()> {
+    let Some(mut script) = app.selected_script().cloned() else {
+        app.status = "no script selected".to_string();
+        return Ok(());
+    };
+    let path = write_temp_file("faro-script-edit", "rhai", &script.body)
+        .context("write script edit file")?;
+    run_editor(terminal, app, &path).context("run editor for script edit")?;
+    let body = read_script_body(&path)?;
+    if body.trim().is_empty() {
+        app.status = "script edit skipped: empty file".to_string();
+        return Ok(());
+    }
+    script.body = body;
+    script.updated_at = faro_core::now_ms();
+    save_script_record(app, &script).context("save edited script")?;
+    app.reload().context("reload after script edit")?;
+    app.select_script_by_id(&script.id);
+    app.status = format!("updated script {}", script.name);
+    Ok(())
+}
+
 fn run_selected_script(app: &mut WorkbenchState) {
     let Some(script) = app.selected_script().cloned() else {
         app.status = "no script selected".to_string();
@@ -510,6 +563,118 @@ fn run_selected_script(app: &mut WorkbenchState) {
             app.status = format!("script failed: {error}");
         }
     }
+}
+
+fn duplicate_selected_script(app: &mut WorkbenchState) {
+    let Some(script) = app.selected_script().cloned() else {
+        app.status = "no script selected".to_string();
+        return;
+    };
+    let duplicate = ScriptRecord::new(format!("{} copy", script.name), script.body);
+    let script_id = duplicate.id.clone();
+    match save_script_record(app, &duplicate).and_then(|()| app.reload()) {
+        Ok(()) => {
+            app.select_script_by_id(&script_id);
+            app.status = format!("duplicated script {}", script.name);
+        }
+        Err(error) => app.status = format!("duplicate script failed: {error}"),
+    }
+}
+
+fn rename_selected_script(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+    app: &mut WorkbenchState,
+) -> anyhow::Result<()> {
+    let Some(mut script) = app.selected_script().cloned() else {
+        app.status = "no script selected".to_string();
+        return Ok(());
+    };
+    let path = write_temp_file("faro-script-rename", "txt", &format!("{}\n", script.name))
+        .context("write script rename file")?;
+    run_editor(terminal, app, &path).context("run editor for script rename")?;
+    let name = fs::read_to_string(&path)
+        .with_context(|| format!("read script rename file {}", path.display()))?
+        .lines()
+        .find_map(|line| {
+            let name = line.trim();
+            (!name.is_empty()).then(|| name.to_string())
+        });
+    let Some(name) = name else {
+        app.status = "script rename skipped: empty name".to_string();
+        return Ok(());
+    };
+    script.name = name;
+    script.updated_at = faro_core::now_ms();
+    save_script_record(app, &script).context("save renamed script")?;
+    app.reload().context("reload after script rename")?;
+    app.select_script_by_id(&script.id);
+    app.status = format!("renamed script {}", script.name);
+    Ok(())
+}
+
+fn delete_selected_script(app: &mut WorkbenchState) {
+    let Some(script) = app.selected_script().cloned() else {
+        app.status = "no script selected".to_string();
+        return;
+    };
+    match Store::open(&app.db_path)
+        .with_context(|| format!("open database {}", app.db_path.display()))
+        .and_then(|store| store.delete_script(&script.id).context("delete script"))
+        .and_then(|()| app.reload())
+    {
+        Ok(()) => app.status = format!("deleted script {}", script.name),
+        Err(error) => app.status = format!("delete script failed: {error}"),
+    }
+}
+
+fn save_script_record(app: &WorkbenchState, script: &ScriptRecord) -> anyhow::Result<()> {
+    let store = Store::open(&app.db_path)
+        .with_context(|| format!("open database {}", app.db_path.display()))?;
+    store.save_script(script).context("save script")?;
+    Ok(())
+}
+
+fn read_script_body(path: &Path) -> anyhow::Result<String> {
+    fs::read_to_string(path).with_context(|| format!("read script file {}", path.display()))
+}
+
+fn script_name_from_body(body: &str) -> Option<String> {
+    body.lines().find_map(|line| {
+        let line = line.trim();
+        let name = line.strip_prefix("// name:")?.trim();
+        (!name.is_empty()).then(|| name.to_string())
+    })
+}
+
+fn next_script_name(app: &WorkbenchState) -> String {
+    let mut number = app.scripts.len() + 1;
+    loop {
+        let name = format!("Script {number}");
+        if app.scripts.iter().all(|script| script.name != name) {
+            return name;
+        }
+        number += 1;
+    }
+}
+
+fn default_script_body() -> String {
+    [
+        "// name: Investigate failures",
+        "// Faro scripts run against captured browser data.",
+        "",
+        "let failed = faros.requests.filter(#{",
+        "    status: #{ gte: 400 }",
+        "});",
+        "",
+        "for req in failed {",
+        "    println(`${req.status} ${req.url}`);",
+        "}",
+        "",
+        "let rows = faros.sql.query(\"SELECT id, method, url, status FROM requests WHERE status >= 500 LIMIT 20\");",
+        "println(rows.len());",
+        "",
+    ]
+    .join("\n")
 }
 
 fn replay_selected_request(app: &mut WorkbenchState) {

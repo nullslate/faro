@@ -18,7 +18,12 @@ pub(crate) enum InputOutcome {
     SaveLayout,
     RefreshPage,
     SqlQuery,
+    CreateScript,
+    EditScript,
     RunScript,
+    DuplicateScript,
+    RenameScript,
+    DeleteScript,
 }
 
 pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
@@ -220,12 +225,17 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             app.toggle_density_mode();
             InputOutcome::SaveLayout
         }
+        KeyCode::Char('n') if app.view == WorkbenchView::Scripts => InputOutcome::CreateScript,
+        KeyCode::Char('e') if app.view == WorkbenchView::Scripts => InputOutcome::EditScript,
         KeyCode::Char('e') if app.view == WorkbenchView::Console => InputOutcome::EditConsole,
         KeyCode::Char('e') => InputOutcome::OpenEditor,
         KeyCode::Char('r') if app.view == WorkbenchView::Scripts => InputOutcome::RunScript,
         KeyCode::Char('r') => InputOutcome::Replay,
+        KeyCode::Char('R') if app.view == WorkbenchView::Scripts => InputOutcome::RenameScript,
         KeyCode::Char('R') => InputOutcome::EditReplay,
+        KeyCode::Char('D') if app.view == WorkbenchView::Scripts => InputOutcome::DuplicateScript,
         KeyCode::Char('D') => InputOutcome::DiffReplay,
+        KeyCode::Char('x') if app.view == WorkbenchView::Scripts => InputOutcome::DeleteScript,
         KeyCode::Char('s') => {
             app.next_sort_mode();
             InputOutcome::Continue
@@ -301,5 +311,11 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
         PaletteCommand::OpenEditor => InputOutcome::OpenEditor,
         PaletteCommand::EditConsole => InputOutcome::EditConsole,
         PaletteCommand::SqlQuery => InputOutcome::SqlQuery,
+        PaletteCommand::CreateScript => InputOutcome::CreateScript,
+        PaletteCommand::EditScript => InputOutcome::EditScript,
+        PaletteCommand::RunScript => InputOutcome::RunScript,
+        PaletteCommand::DuplicateScript => InputOutcome::DuplicateScript,
+        PaletteCommand::RenameScript => InputOutcome::RenameScript,
+        PaletteCommand::DeleteScript => InputOutcome::DeleteScript,
     }
 }

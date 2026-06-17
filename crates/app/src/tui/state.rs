@@ -1149,6 +1149,14 @@ impl WorkbenchState {
             .and_then(|index| self.scripts.get(index))
     }
 
+    pub(crate) fn select_script_by_id(&mut self, script_id: &str) {
+        self.script_state.select(
+            self.scripts
+                .iter()
+                .position(|script| script.id == script_id),
+        );
+    }
+
     fn apply_filter(&mut self) {
         let selected_id = self
             .selected_request()
@@ -1969,6 +1977,12 @@ pub(crate) enum PaletteCommand {
     OpenEditor,
     EditConsole,
     SqlQuery,
+    CreateScript,
+    EditScript,
+    RunScript,
+    DuplicateScript,
+    RenameScript,
+    DeleteScript,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2153,6 +2167,36 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "SQL Query",
         hint: "read-only sqlite workbench database",
         command: PaletteCommand::SqlQuery,
+    },
+    PaletteEntry {
+        title: "Scripts: New",
+        hint: "create editor workflow",
+        command: PaletteCommand::CreateScript,
+    },
+    PaletteEntry {
+        title: "Scripts: Edit",
+        hint: "open selected script in editor",
+        command: PaletteCommand::EditScript,
+    },
+    PaletteEntry {
+        title: "Scripts: Run",
+        hint: "execute selected script",
+        command: PaletteCommand::RunScript,
+    },
+    PaletteEntry {
+        title: "Scripts: Duplicate",
+        hint: "copy selected script",
+        command: PaletteCommand::DuplicateScript,
+    },
+    PaletteEntry {
+        title: "Scripts: Rename",
+        hint: "rename selected script",
+        command: PaletteCommand::RenameScript,
+    },
+    PaletteEntry {
+        title: "Scripts: Delete",
+        hint: "remove selected script",
+        command: PaletteCommand::DeleteScript,
     },
     PaletteEntry {
         title: "Show Keys",
