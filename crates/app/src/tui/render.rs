@@ -2339,13 +2339,21 @@ fn request_tree_marker(
     let indent = meta
         .map(|meta| "  ".repeat(meta.depth.saturating_sub(1).min(6)))
         .unwrap_or_default();
+    let row_has_children = meta.map(|meta| meta.has_children).unwrap_or(false);
     let (marker, marker_style) = open_route
         .map(|(collapsed, child_count)| {
-            (
-                route_child_marker(collapsed, child_count),
-                fade.accent_style(theme.active_border)
-                    .add_modifier(Modifier::BOLD),
-            )
+            if row_has_children {
+                (
+                    route_child_marker(collapsed, child_count),
+                    fade.accent_style(theme.active_border)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                (
+                    route_ancestor_marker(collapsed, child_count),
+                    fade.secondary_style(theme),
+                )
+            }
         })
         .unwrap_or_else(|| ("".to_string(), fade.secondary_style(theme)));
     Line::from(vec![
@@ -2358,7 +2366,16 @@ fn request_tree_marker(
 
 fn route_child_marker(collapsed: bool, child_count: usize) -> String {
     let count = child_count.min(99);
-    format!("{} open {count}", if collapsed { "▸" } else { "▾" })
+    format!(
+        "{} {} {count}",
+        if collapsed { "▸" } else { "▾" },
+        "children"
+    )
+}
+
+fn route_ancestor_marker(collapsed: bool, child_count: usize) -> String {
+    let count = child_count.min(99);
+    format!("{} open {count}", if collapsed { "↳▸" } else { "↳▾" })
 }
 
 fn method_style(method: &str, fade: RowFade, theme: &Theme) -> Style {
@@ -3795,10 +3812,13 @@ mod tests {
     }
 
     #[test]
-    fn route_child_marker_shows_only_expandable_action() {
-        assert_eq!(route_child_marker(true, 1), "▸ open 1");
-        assert_eq!(route_child_marker(false, 8), "▾ open 8");
-        assert_eq!(route_child_marker(true, 120), "▸ open 99");
+    fn route_markers_distinguish_parent_from_drillthrough_rows() {
+        assert_eq!(route_child_marker(true, 1), "▸ children 1");
+        assert_eq!(route_child_marker(false, 8), "▾ children 8");
+        assert_eq!(route_child_marker(true, 120), "▸ children 99");
+        assert_eq!(route_ancestor_marker(true, 1), "↳▸ open 1");
+        assert_eq!(route_ancestor_marker(false, 8), "↳▾ open 8");
+        assert_eq!(route_ancestor_marker(true, 120), "↳▸ open 99");
     }
 
     #[test]

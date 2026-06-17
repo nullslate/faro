@@ -1251,16 +1251,30 @@ impl WorkbenchState {
         let meta = self.request_tree_metas.get(request_index)?;
         meta.group_key
             .as_ref()
-            .filter(|_| meta.has_children)
+            .filter(|key| self.route_group_child_count(key) > 0)
             .cloned()
             .or_else(|| {
-                meta.ancestor_keys.iter().rev().find_map(|key| {
-                    self.request_tree_metas
-                        .iter()
-                        .any(|meta| meta.group_key.as_deref() == Some(key) && meta.has_children)
-                        .then(|| key.clone())
-                })
+                meta.ancestor_keys
+                    .iter()
+                    .rev()
+                    .find_map(|key| (self.route_group_child_count(key) > 0).then(|| key.clone()))
             })
+    }
+
+    fn route_group_child_count(&self, group: &str) -> usize {
+        if let Some(child_count) = self
+            .request_tree_metas
+            .iter()
+            .find(|meta| meta.group_key.as_deref() == Some(group))
+            .map(|meta| meta.child_count)
+            && child_count > 0
+        {
+            return child_count;
+        }
+        self.request_tree_metas
+            .iter()
+            .filter(|meta| meta.ancestor_keys.iter().any(|key| key == group))
+            .count()
     }
 
     pub(crate) fn request_tree_meta(&self, request_index: usize) -> Option<RequestTreeMeta> {
@@ -1278,15 +1292,10 @@ impl WorkbenchState {
         request_index: usize,
     ) -> Option<(bool, usize)> {
         let group = self.collapsible_group_key_for_request_index(request_index)?;
-        self.request_tree_metas
-            .iter()
-            .find(|meta| meta.group_key.as_deref() == Some(group.as_str()) && meta.has_children)
-            .map(|meta| {
-                (
-                    self.collapsed_request_groups.contains(&group),
-                    meta.child_count,
-                )
-            })
+        Some((
+            self.collapsed_request_groups.contains(&group),
+            self.route_group_child_count(&group),
+        ))
     }
 
     pub(crate) fn active_expanded_request_group(&self) -> Option<String> {
@@ -3451,6 +3460,29 @@ mod tests {
 
         assert_eq!(state.request_open_route_child_count(0), Some((false, 1)));
         assert_eq!(state.request_open_route_child_count(1), Some((false, 1)));
+        Ok(())
+    }
+
+    #[test]
+    fn request_open_route_counts_shared_prefix_without_parent_row() -> TestResult {
+        let mut first = request_view();
+        first.request.url = "http://localhost:5173/api/users/123".to_string();
+        let mut second = request_view();
+        second.request.url = "http://localhost:5173/api/users/456".to_string();
+        let requests = vec![first, second];
+        let metas = build_request_tree_metas(&requests);
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.requests = requests;
+        state.request_tree_metas = metas;
+
+        assert_eq!(state.request_open_route_child_count(0), Some((false, 2)));
+        assert_eq!(state.request_open_route_child_count(1), Some((false, 2)));
         Ok(())
     }
 }
