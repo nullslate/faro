@@ -43,6 +43,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) detail_scroll: u16,
     pub(crate) body_scroll: u16,
     pub(crate) body_tree_selected: usize,
+    pub(crate) body_tree_selected_key: Option<String>,
     pub(crate) collapsed_body_nodes: HashSet<String>,
     pub(crate) storage_scroll: u16,
     pub(crate) cookie_scroll: u16,
@@ -160,6 +161,7 @@ impl WorkbenchState {
             detail_scroll: 0,
             body_scroll: 0,
             body_tree_selected: 0,
+            body_tree_selected_key: None,
             collapsed_body_nodes: HashSet::new(),
             storage_scroll: 0,
             cookie_scroll: 0,
@@ -493,7 +495,11 @@ impl WorkbenchState {
     pub(crate) fn scroll_top(&mut self) {
         match self.focus {
             FocusPane::Detail => self.detail_scroll = 0,
-            FocusPane::Body => self.body_scroll = 0,
+            FocusPane::Body => {
+                self.body_scroll = 0;
+                self.body_tree_selected = 0;
+                self.sync_body_tree_selected_key();
+            }
             FocusPane::Storage => {
                 self.storage_selected = 0;
                 self.storage_scroll = 0;
@@ -514,7 +520,14 @@ impl WorkbenchState {
     pub(crate) fn scroll_bottom(&mut self) {
         match self.focus {
             FocusPane::Detail => self.detail_scroll = self.detail_line_count().saturating_sub(1),
-            FocusPane::Body => self.body_scroll = self.body_line_count().saturating_sub(1),
+            FocusPane::Body => {
+                let len = self.body_tree_items().len();
+                if len > 0 {
+                    self.body_tree_selected = len - 1;
+                    self.sync_body_tree_selected_key();
+                }
+                self.body_scroll = self.body_line_count().saturating_sub(1);
+            }
             FocusPane::Storage => {
                 self.storage_selected = self.current_storage_entries().len().saturating_sub(1);
                 self.storage_scroll = self
@@ -1017,6 +1030,7 @@ impl WorkbenchState {
         self.detail_scroll = 0;
         self.body_scroll = 0;
         self.body_tree_selected = 0;
+        self.body_tree_selected_key = None;
         self.collapsed_body_nodes.clear();
     }
 
@@ -1035,10 +1049,12 @@ impl WorkbenchState {
             self.collapsed_body_nodes.insert(item.key.clone());
             self.status = format!("collapsed {}", item.label);
         }
+        let selected_key = item.key.clone();
         let len = self.body_tree_items().len();
         if len > 0 {
             self.body_tree_selected = self.body_tree_selected.min(len - 1);
         }
+        self.select_body_tree_key(&selected_key);
         self.note_status_changed();
     }
 
@@ -1052,6 +1068,7 @@ impl WorkbenchState {
             return;
         }
         self.body_tree_selected = (self.body_tree_selected + 1).min(len - 1);
+        self.sync_body_tree_selected_key();
         self.body_scroll = self
             .body_tree_selected
             .saturating_sub(3)
@@ -1063,10 +1080,35 @@ impl WorkbenchState {
             return;
         }
         self.body_tree_selected = self.body_tree_selected.saturating_sub(1);
+        self.sync_body_tree_selected_key();
         self.body_scroll = self
             .body_tree_selected
             .saturating_sub(3)
             .min(u16::MAX as usize) as u16;
+    }
+
+    fn select_body_tree_key(&mut self, key: &str) {
+        let items = self.body_tree_items();
+        if let Some(index) = items.iter().position(|item| item.key == key) {
+            self.body_tree_selected = index;
+            self.body_tree_selected_key = Some(key.to_string());
+            self.body_scroll = self
+                .body_tree_selected
+                .saturating_sub(3)
+                .min(u16::MAX as usize) as u16;
+        } else {
+            self.sync_body_tree_selected_key();
+        }
+    }
+
+    fn sync_body_tree_selected_key(&mut self) {
+        let items = self.body_tree_items();
+        if let Some(item) = items.get(self.body_tree_selected) {
+            self.body_tree_selected_key = Some(item.key.clone());
+        } else {
+            self.body_tree_selected = 0;
+            self.body_tree_selected_key = items.first().map(|item| item.key.clone());
+        }
     }
 
     fn detail_line_count(&self) -> u16 {

@@ -2619,6 +2619,7 @@ mod tests {
             detail_scroll: 0,
             body_scroll: 0,
             body_tree_selected: 0,
+            body_tree_selected_key: None,
             collapsed_body_nodes: std::collections::HashSet::new(),
             storage_scroll: 0,
             cookie_scroll: 0,
