@@ -504,7 +504,7 @@ impl WorkbenchState {
         else {
             return;
         };
-        let Some(group) = self.collapsible_group_key_for_request_index(request_index) else {
+        let Some(group) = self.drilldown_group_key_for_request_index(request_index) else {
             self.status = "no collapsible request branch".to_string();
             return;
         };
@@ -1324,6 +1324,20 @@ impl WorkbenchState {
                     .rev()
                     .find_map(|key| (self.route_group_child_count(key) > 0).then(|| key.clone()))
             })
+    }
+
+    fn drilldown_group_key_for_request_index(&self, request_index: usize) -> Option<String> {
+        let active_group = self.active_request_route_group.as_deref();
+        let group = self.collapsible_group_key_for_request_index(request_index)?;
+        let can_drill = active_group
+            .map(|active| group != active && group.starts_with(&format!("{active}/")))
+            .unwrap_or(true);
+        can_drill.then_some(group)
+    }
+
+    pub(crate) fn request_can_drill_down(&self, request_index: usize) -> bool {
+        self.drilldown_group_key_for_request_index(request_index)
+            .is_some()
     }
 
     fn route_group_child_count(&self, group: &str) -> usize {
@@ -3639,8 +3653,11 @@ mod tests {
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
 
-        assert!(state.collapsible_group_key_for_request_index(0).is_some());
-        assert!(state.collapsible_group_key_for_request_index(1).is_some());
+        assert!(state.request_can_drill_down(0));
+        assert!(state.request_can_drill_down(1));
+        state.active_request_route_group = state.collapsible_group_key_for_request_index(0);
+        assert!(!state.request_can_drill_down(0));
+        assert!(!state.request_can_drill_down(1));
         Ok(())
     }
 }
