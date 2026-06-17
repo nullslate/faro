@@ -607,7 +607,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     let table = Table::new(
         rows,
         [
-            Constraint::Length(14),
+            Constraint::Length(18),
             Constraint::Length(4),
             Constraint::Length(8),
             Constraint::Length(10),
@@ -619,7 +619,7 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     )
     .header(
         Row::new([
-            "TREE", "CODE", "METHOD", "TYPE", "DOMAIN", "PATH", "TIME", "SIZE",
+            "CHILDREN", "CODE", "METHOD", "TYPE", "DOMAIN", "PATH", "TIME", "SIZE",
         ])
         .style(muted_style().add_modifier(Modifier::BOLD)),
     )
@@ -2340,25 +2340,27 @@ fn request_tree_marker(
         .map(|meta| {
             if meta.has_children {
                 (
-                    format!(
-                        "[{} {:>2}]",
-                        if meta.collapsed { "▸" } else { "▾" },
-                        meta.child_count.min(99)
-                    ),
+                    route_child_marker(meta.collapsed, meta.child_count),
                     fade.accent_style(theme.active_border)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                ("  ·  ".to_string(), fade.secondary_style(theme))
+                ("leaf".to_string(), fade.secondary_style(theme))
             }
         })
-        .unwrap_or_else(|| ("  ·  ".to_string(), fade.secondary_style(theme)));
+        .unwrap_or_else(|| ("leaf".to_string(), fade.secondary_style(theme)));
     Line::from(vec![
         Span::styled(branch.to_string(), branch_style),
         Span::styled("─".to_string(), fade.secondary_style(theme)),
         Span::raw(indent),
         Span::styled(marker, marker_style),
     ])
+}
+
+fn route_child_marker(collapsed: bool, child_count: usize) -> String {
+    let count = child_count.min(99);
+    let noun = if count == 1 { "child" } else { "children" };
+    format!("{} {count} {noun}", if collapsed { "▸" } else { "▾" })
 }
 
 fn method_style(method: &str, fade: RowFade, theme: &Theme) -> Style {
@@ -3792,6 +3794,13 @@ mod tests {
         assert!(text.contains("3 WS"));
         assert!(text.contains("4 Storage"));
         assert!(text.contains("5 Cookies"));
+    }
+
+    #[test]
+    fn route_child_marker_uses_plain_language() {
+        assert_eq!(route_child_marker(true, 1), "▸ 1 child");
+        assert_eq!(route_child_marker(false, 8), "▾ 8 children");
+        assert_eq!(route_child_marker(true, 120), "▸ 99 children");
     }
 
     #[test]
