@@ -1381,17 +1381,6 @@ impl WorkbenchState {
             .count()
     }
 
-    pub(crate) fn request_open_route_child_count(
-        &self,
-        request_index: usize,
-    ) -> Option<(bool, usize)> {
-        let group = self.collapsible_group_key_for_request_index(request_index)?;
-        Some((
-            self.collapsed_request_groups.contains(&group),
-            self.route_group_child_count(&group),
-        ))
-    }
-
     pub(crate) fn active_expanded_request_group(&self) -> Option<String> {
         self.active_request_route_group.clone()
     }
@@ -3563,8 +3552,14 @@ mod tests {
         state.requests = requests;
         state.request_tree_metas = metas;
 
-        assert_eq!(state.request_open_route_child_count(0), Some((false, 1)));
-        assert_eq!(state.request_open_route_child_count(1), Some((false, 1)));
+        assert_eq!(
+            state.collapsible_group_key_for_request_index(0).as_deref(),
+            Some("localhost:5173/api/users")
+        );
+        assert_eq!(
+            state.collapsible_group_key_for_request_index(1).as_deref(),
+            Some("localhost:5173/api/users")
+        );
         Ok(())
     }
 
@@ -3613,8 +3608,15 @@ mod tests {
         state.requests = requests;
         state.request_tree_metas = metas;
 
-        assert_eq!(state.request_open_route_child_count(0), Some((false, 2)));
-        assert_eq!(state.request_open_route_child_count(1), Some((false, 2)));
+        let Some(group) = state.collapsible_group_key_for_request_index(0) else {
+            panic!("missing collapsible group");
+        };
+        assert_eq!(group, "localhost:5173/api/users");
+        assert_eq!(state.route_group_child_count(&group), 2);
+        assert_eq!(
+            state.collapsible_group_key_for_request_index(1).as_deref(),
+            Some(group.as_str())
+        );
         Ok(())
     }
 
@@ -3637,8 +3639,8 @@ mod tests {
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
 
-        assert!(state.request_open_route_child_count(0).is_some());
-        assert!(state.request_open_route_child_count(1).is_some());
+        assert!(state.collapsible_group_key_for_request_index(0).is_some());
+        assert!(state.collapsible_group_key_for_request_index(1).is_some());
         Ok(())
     }
 }
