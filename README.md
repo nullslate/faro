@@ -73,6 +73,23 @@ devbench --attach-port 9222 http://localhost:5173
 
 Use `DEVBENCH_BROWSER=/path/to/chrome-or-chromium` to override browser discovery.
 
+### Editor Handoff
+
+Devbench opens `$EDITOR` for SQL, console evaluation, body viewing/editing, storage edits, cookie edits, and replay editing. Terminal editors usually work as-is:
+
+```sh
+export EDITOR=nvim
+```
+
+GUI editors should be configured to wait until the file is closed:
+
+```sh
+export EDITOR="code --wait"
+export EDITOR="zed --wait"
+```
+
+Without a wait flag, GUI editors may return immediately and Devbench will resume before the file is saved.
+
 ## TUI Basics
 
 Common keys:
