@@ -1344,12 +1344,41 @@ impl WorkbenchState {
 
     pub(crate) fn request_tree_meta(&self, request_index: usize) -> Option<RequestTreeMeta> {
         let mut meta = self.request_tree_metas.get(request_index)?.clone();
+        let parts = self
+            .requests
+            .get(request_index)
+            .map(request_tree_parts)
+            .unwrap_or_default();
+        let visible_child_count = self.filtered_route_child_count_for_parts(request_index, &parts);
+        if visible_child_count > 0 {
+            meta.has_children = true;
+            meta.child_count = visible_child_count;
+        }
         meta.collapsed = meta
             .group_key
             .as_deref()
             .map(|key| self.collapsed_request_groups.contains(key))
             .unwrap_or(false);
         Some(meta)
+    }
+
+    fn filtered_route_child_count_for_parts(
+        &self,
+        request_index: usize,
+        parts: &[String],
+    ) -> usize {
+        if parts.len() <= 1 {
+            return 0;
+        }
+        self.filtered_request_indices
+            .iter()
+            .filter(|candidate_index| **candidate_index != request_index)
+            .filter_map(|candidate_index| self.requests.get(*candidate_index))
+            .map(request_tree_parts)
+            .filter(|candidate_parts| {
+                candidate_parts.len() > parts.len() && candidate_parts.starts_with(parts)
+            })
+            .count()
     }
 
     pub(crate) fn request_open_route_child_count(
@@ -3225,7 +3254,8 @@ fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestTreeMeta> {
 }
 
 fn normalized_path_segments(path: &str) -> Vec<String> {
-    path.split(['/', '?', '#'])
+    let path = path.split(['?', '#']).next().unwrap_or(path);
+    path.split('/')
         .filter(|segment| !segment.is_empty())
         .map(normalize_path_segment)
         .collect()
@@ -3535,6 +3565,33 @@ mod tests {
 
         assert_eq!(state.request_open_route_child_count(0), Some((false, 1)));
         assert_eq!(state.request_open_route_child_count(1), Some((false, 1)));
+        Ok(())
+    }
+
+    #[test]
+    fn request_tree_meta_marks_visible_leaf_parent_with_query_as_having_children() -> TestResult {
+        let mut parent = request_view();
+        parent.request.url = "http://localhost:5173/api/users?limit=10".to_string();
+        let mut child = request_view();
+        child.request.url = "http://localhost:5173/api/users/123".to_string();
+        let requests = vec![parent, child];
+        let metas = build_request_tree_metas(&requests);
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.requests = requests;
+        state.request_tree_metas = metas;
+        state.filtered_request_indices = vec![0, 1];
+
+        let Some(parent_meta) = state.request_tree_meta(0) else {
+            panic!("missing parent meta");
+        };
+        assert!(parent_meta.has_children);
+        assert_eq!(parent_meta.child_count, 1);
         Ok(())
     }
 
