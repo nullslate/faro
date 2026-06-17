@@ -469,7 +469,7 @@ fn create_script(
 ) -> anyhow::Result<()> {
     app.set_view(WorkbenchView::Scripts);
     let body = default_script_body();
-    let path = write_temp_file("faro-script-new", "rhai", &body).context("write script file")?;
+    let path = write_temp_file("faro-script-new", "rs", &body).context("write script file")?;
     run_editor(terminal, app, &path).context("run editor for new script")?;
     let body = read_script_body(&path)?;
     if body.trim().is_empty() {
@@ -494,7 +494,7 @@ fn edit_selected_script(
         app.status = "no script selected".to_string();
         return Ok(());
     };
-    let path = write_temp_file("faro-script-edit", "rhai", &script.body)
+    let path = write_temp_file("faro-script-edit", "rs", &script.body)
         .context("write script edit file")?;
     run_editor(terminal, app, &path).context("run editor for script edit")?;
     let body = read_script_body(&path)?;
@@ -661,6 +661,7 @@ fn default_script_body() -> String {
     [
         "// name: Investigate failures",
         "// Faro scripts run against captured browser data.",
+        "// Temp files use .rs for editor highlighting; execution uses Faro's embedded runtime.",
         "",
         "let failed = faros.requests.filter(#{",
         "    status: #{ gte: 400 }",
