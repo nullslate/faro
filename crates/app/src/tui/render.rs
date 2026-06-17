@@ -1254,12 +1254,29 @@ fn script_output_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
     if !lines.is_empty() {
         lines.push(Line::raw(""));
     }
+    if let Some(script) = app.selected_script() {
+        lines.push(Line::from(vec![
+            Span::styled("source ", label_style()),
+            Span::styled("e to edit", key_style()),
+        ]));
+        lines.extend(script_source_lines(&script.body, 80));
+        lines.push(Line::raw(""));
+    }
     if app.script_output.is_empty() {
         lines.push(Line::styled("no output", muted_style()));
     } else {
+        lines.push(Line::styled("output", label_style()));
         lines.extend(app.script_output.iter().map(|line| Line::raw(line.clone())));
     }
     lines
+}
+
+fn script_source_lines(source: &str, max_lines: usize) -> Vec<Line<'static>> {
+    source
+        .lines()
+        .take(max_lines)
+        .map(highlight_javascript_line)
+        .collect()
 }
 
 fn render_storage(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
@@ -3564,6 +3581,7 @@ mod tests {
         CookieEventRecord, CookieRecord, CookieSnapshotRecord, RequestRecord, ResponseRecord,
         StorageEntry, StorageEventRecord, StorageSnapshotRecord,
     };
+    use faro_store::ScriptRecord;
     use ratatui::widgets::{ListState, TableState};
     use std::path::PathBuf;
 
@@ -3902,6 +3920,26 @@ mod tests {
         assert!(spans.iter().any(|span| span.content.as_ref() == "const"));
         assert!(spans.iter().any(|span| span.content.as_ref() == "document"));
         assert!(spans.iter().any(|span| span.content.as_ref() == "title"));
+    }
+
+    #[test]
+    fn script_output_lines_highlight_selected_script_source() {
+        let mut app = state_with_storage(Vec::new(), Vec::new());
+        app.scripts.push(ScriptRecord::new(
+            "Example",
+            "let failed = faros.requests.filter(#{ status: #{ gte: 400 } });",
+        ));
+        app.script_state.select(Some(0));
+        let lines = script_output_lines(&app);
+        let spans = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .collect::<Vec<_>>();
+
+        assert!(spans.iter().any(|span| span.content.as_ref() == "source "));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "let"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "faros"));
+        assert!(spans.iter().any(|span| span.content.as_ref() == "400"));
     }
 
     #[test]
