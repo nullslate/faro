@@ -24,6 +24,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) requests: Vec<RequestView>,
     pub(crate) request_tree_metas: Vec<RequestTreeMeta>,
     pub(crate) filtered_request_indices: Vec<usize>,
+    pub(crate) filtered_route_descendant_counts: HashMap<String, usize>,
     pub(crate) collapsed_request_groups: HashSet<String>,
     pub(crate) active_request_route_group: Option<String>,
     pub(crate) sql_request_filter_ids: Option<HashSet<String>>,
@@ -167,6 +168,7 @@ impl WorkbenchState {
             requests,
             request_tree_metas,
             filtered_request_indices,
+            filtered_route_descendant_counts: HashMap::new(),
             collapsed_request_groups: HashSet::new(),
             active_request_route_group: None,
             sql_request_filter_ids: None,
@@ -252,6 +254,7 @@ impl WorkbenchState {
         self.active_session_id = loaded.active_session_id;
         self.requests = loaded.requests;
         self.request_tree_metas = loaded.request_tree_metas;
+        self.filtered_route_descendant_counts = HashMap::new();
         self.collapsed_request_groups = collapsed_request_groups;
         self.active_request_route_group = active_request_route_group;
         self.console_logs = loaded.console_logs;
@@ -471,7 +474,7 @@ impl WorkbenchState {
         if position < self.filtered_request_indices.len() {
             self.table_state.select(Some(position));
             self.reset_request_view_scroll();
-            self.hydrate_selected_request();
+            self.hydrate_selected_request_for_active_detail();
         }
     }
 
@@ -565,6 +568,7 @@ impl WorkbenchState {
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
+        self.hydrate_selected_request_for_active_detail();
     }
 
     pub(crate) fn set_focus(&mut self, focus: FocusPane) {
@@ -622,16 +626,19 @@ impl WorkbenchState {
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
+        self.hydrate_selected_request_for_active_detail();
     }
 
     pub(crate) fn next_tab(&mut self) {
         self.detail_tab = self.detail_tab.next();
         self.detail_scroll = 0;
+        self.hydrate_selected_request_for_active_detail();
     }
 
     pub(crate) fn previous_tab(&mut self) {
         self.detail_tab = self.detail_tab.previous();
         self.detail_scroll = 0;
+        self.hydrate_selected_request_for_active_detail();
     }
 
     pub(crate) fn scroll_down(&mut self) {
@@ -876,7 +883,7 @@ impl WorkbenchState {
         };
         self.table_state.select(Some(next));
         self.reset_request_view_scroll();
-        self.hydrate_selected_request();
+        self.hydrate_selected_request_for_active_detail();
     }
 
     fn previous_request(&mut self) {
@@ -889,7 +896,7 @@ impl WorkbenchState {
         };
         self.table_state.select(Some(previous));
         self.reset_request_view_scroll();
-        self.hydrate_selected_request();
+        self.hydrate_selected_request_for_active_detail();
     }
 
     fn next_console(&mut self) {
@@ -1189,13 +1196,29 @@ impl WorkbenchState {
                 ordering
             }
         });
+        self.rebuild_filtered_route_descendant_counts();
 
         let selected = selected_id
             .and_then(|id| self.filtered_index_for_request_id(&id))
             .or_else(|| (!self.filtered_request_indices.is_empty()).then_some(0));
         self.table_state.select(selected);
         self.reset_request_view_scroll();
-        self.hydrate_selected_request();
+        self.hydrate_selected_request_for_active_detail();
+    }
+
+    fn rebuild_filtered_route_descendant_counts(&mut self) {
+        self.filtered_route_descendant_counts.clear();
+        for request_index in &self.filtered_request_indices {
+            let Some(request) = self.requests.get(*request_index) else {
+                continue;
+            };
+            for group in request_group_keys(request) {
+                *self
+                    .filtered_route_descendant_counts
+                    .entry(group)
+                    .or_insert(0) += 1;
+            }
+        }
     }
 
     pub(crate) fn hydrate_selected_request(&mut self) {
@@ -1218,6 +1241,61 @@ impl WorkbenchState {
             self.status = format!("request detail load failed: {error}");
             self.note_status_changed();
         }
+    }
+
+    pub(crate) fn hydrate_selected_request_for_active_detail(&mut self) {
+        if self.view != WorkbenchView::Network {
+            return;
+        }
+        if matches!(self.focus, FocusPane::Detail | FocusPane::Body) {
+            self.hydrate_selected_request();
+        }
+    }
+
+    pub(crate) fn refresh_replays_for_request(&mut self, request_id: &str) -> anyhow::Result<()> {
+        let Some(request_index) = self
+            .requests
+            .iter()
+            .position(|request| request.request.id == request_id)
+        else {
+            return Ok(());
+        };
+        let store = Store::open(&self.db_path)
+            .with_context(|| format!("open database {}", self.db_path.display()))?;
+        let Some(request) = self.requests.get_mut(request_index) else {
+            return Ok(());
+        };
+        request.replays = store
+            .replays_for_request(request_id)?
+            .into_iter()
+            .map(|record| {
+                let body = body_text_for_ref(&store, record.response_body_ref.as_deref())
+                    .with_context(|| format!("load replay body for {}", record.id))?;
+                anyhow::Ok(ReplayView { record, body })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        request.details_loaded = true;
+        Ok(())
+    }
+
+    pub(crate) fn apply_request_details(
+        &mut self,
+        request_id: &str,
+        request_body: Option<String>,
+        response_body: Option<String>,
+        replays: Vec<ReplayView>,
+    ) {
+        let Some(request) = self
+            .requests
+            .iter_mut()
+            .find(|request| request.request.id == request_id)
+        else {
+            return;
+        };
+        request.request_body = request_body;
+        request.response_body = response_body;
+        request.replays = replays;
+        request.details_loaded = true;
     }
 
     fn load_request_details(
@@ -1349,32 +1427,23 @@ impl WorkbenchState {
     }
 
     fn route_group_child_count(&self, group: &str) -> usize {
-        if let Some(child_count) = self
-            .request_tree_metas
-            .iter()
-            .find(|meta| meta.group_key.as_deref() == Some(group))
-            .map(|meta| meta.child_count)
-            && child_count > 0
-        {
-            return child_count;
-        }
-        self.request_tree_metas
-            .iter()
-            .filter(|meta| meta.ancestor_keys.iter().any(|key| key == group))
-            .count()
+        self.filtered_route_descendant_counts
+            .get(group)
+            .copied()
+            .unwrap_or(0)
     }
 
     pub(crate) fn request_tree_meta(&self, request_index: usize) -> Option<RequestTreeMeta> {
         let mut meta = self.request_tree_metas.get(request_index)?.clone();
-        let parts = self
-            .requests
-            .get(request_index)
-            .map(request_tree_parts)
-            .unwrap_or_default();
-        let visible_child_count = self.filtered_route_child_count_for_parts(request_index, &parts);
-        if visible_child_count > 0 {
-            meta.has_children = true;
-            meta.child_count = visible_child_count;
+        if let Some(group) = &meta.group_key {
+            let visible_child_count = self.route_group_child_count(group);
+            if visible_child_count > 0 {
+                meta.has_children = true;
+                meta.child_count = visible_child_count;
+            } else {
+                meta.has_children = false;
+                meta.child_count = 0;
+            }
         }
         meta.collapsed = meta
             .group_key
@@ -1382,25 +1451,6 @@ impl WorkbenchState {
             .map(|key| self.collapsed_request_groups.contains(key))
             .unwrap_or(false);
         Some(meta)
-    }
-
-    fn filtered_route_child_count_for_parts(
-        &self,
-        request_index: usize,
-        parts: &[String],
-    ) -> usize {
-        if parts.len() <= 1 {
-            return 0;
-        }
-        self.filtered_request_indices
-            .iter()
-            .filter(|candidate_index| **candidate_index != request_index)
-            .filter_map(|candidate_index| self.requests.get(*candidate_index))
-            .map(request_tree_parts)
-            .filter(|candidate_parts| {
-                candidate_parts.len() > parts.len() && candidate_parts.starts_with(parts)
-            })
-            .count()
     }
 
     pub(crate) fn active_expanded_request_group(&self) -> Option<String> {
@@ -1713,7 +1763,10 @@ impl WorkbenchState {
     }
 }
 
-fn body_text_for_ref(store: &Store, body_id: Option<&str>) -> anyhow::Result<Option<String>> {
+pub(crate) fn body_text_for_ref(
+    store: &Store,
+    body_id: Option<&str>,
+) -> anyhow::Result<Option<String>> {
     let Some(body_id) = body_id else {
         return Ok(None);
     };
@@ -1983,6 +2036,7 @@ pub(crate) enum PaletteCommand {
     DuplicateScript,
     RenameScript,
     DeleteScript,
+    ResetScriptTemplates,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2197,6 +2251,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "Scripts: Delete",
         hint: "remove selected script",
         command: PaletteCommand::DeleteScript,
+    },
+    PaletteEntry {
+        title: "Scripts: Reset Templates",
+        hint: "preload useful automation examples",
+        command: PaletteCommand::ResetScriptTemplates,
     },
     PaletteEntry {
         title: "Show Keys",
@@ -3609,6 +3668,8 @@ mod tests {
         )?;
         state.requests = requests;
         state.request_tree_metas = metas;
+        state.filtered_request_indices = vec![0, 1];
+        state.rebuild_filtered_route_descendant_counts();
 
         assert_eq!(
             state.collapsible_group_key_for_request_index(0).as_deref(),
@@ -3639,6 +3700,7 @@ mod tests {
         state.requests = requests;
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
+        state.rebuild_filtered_route_descendant_counts();
 
         let Some(parent_meta) = state.request_tree_meta(0) else {
             panic!("missing parent meta");
@@ -3665,6 +3727,8 @@ mod tests {
         )?;
         state.requests = requests;
         state.request_tree_metas = metas;
+        state.filtered_request_indices = vec![0, 1];
+        state.rebuild_filtered_route_descendant_counts();
 
         let Some(group) = state.collapsible_group_key_for_request_index(0) else {
             panic!("missing collapsible group");
@@ -3696,6 +3760,7 @@ mod tests {
         state.requests = requests;
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
+        state.rebuild_filtered_route_descendant_counts();
 
         assert!(state.request_can_drill_down(0));
         assert!(state.request_can_drill_down(1));

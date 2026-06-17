@@ -25,7 +25,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use render::render;
 use state::{
-    DetailTab, RequestView, WorkbenchState, WorkbenchView, formatted_request_body,
+    DetailTab, ReplayView, RequestView, WorkbenchState, WorkbenchView, formatted_request_body,
     formatted_response_body,
 };
 use std::collections::HashSet;
@@ -35,11 +35,45 @@ use std::io::{self, Stdout, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub struct RunConfig {
     updates: Option<mpsc::Receiver<CaptureUpdate>>,
     pending_capture: Option<CaptureOptions>,
+}
+
+struct ReplayTask {
+    db_path: PathBuf,
+    args: Vec<String>,
+    session_id: String,
+    tab_id: Option<String>,
+    run_id: Option<String>,
+    request_id: String,
+    command: String,
+}
+
+struct ReplayCompletion {
+    request_id: String,
+    status: String,
+}
+
+struct DetailLoadTask {
+    db_path: PathBuf,
+    request_id: String,
+    request_body_ref: Option<String>,
+    response_body_ref: Option<String>,
+}
+
+struct DetailLoadResult {
+    request_body: Option<String>,
+    response_body: Option<String>,
+    replays: Vec<ReplayView>,
+}
+
+struct DetailLoadCompletion {
+    request_id: String,
+    result: anyhow::Result<DetailLoadResult>,
 }
 
 impl RunConfig {
@@ -76,6 +110,11 @@ pub fn run(
     let mut app = WorkbenchState::load(&store, db_path, target_url, app_config)
         .with_context(|| format!("load TUI state from {}", db_path.display()))?;
     app.last_sql_query = load_last_sql_query().unwrap_or_default();
+    let seeded_scripts = seed_script_templates(&app, false).context("seed script templates")?;
+    if seeded_scripts > 0 {
+        app.reload().context("reload after script template seed")?;
+        app.status = format!("installed {seeded_scripts} starter scripts");
+    }
     if config.pending_capture.is_some() {
         app.status = "press o to open browser and start capture".to_string();
     }
@@ -107,8 +146,20 @@ fn run_loop(
 ) -> anyhow::Result<()> {
     let mut last_status = app.status.clone();
     let mut needs_draw = true;
+    let (replay_tx, replay_rx) = mpsc::channel();
+    let (detail_tx, detail_rx) = mpsc::channel();
+    let mut detail_inflight = HashSet::new();
+    let mut pending_detail_load = None;
     loop {
         drain_capture_updates(app, config.updates.as_ref());
+        drain_replay_updates(app, &replay_rx);
+        drain_detail_updates(app, &detail_rx, &mut detail_inflight);
+        maybe_start_selected_detail_load(
+            app,
+            &detail_tx,
+            &mut detail_inflight,
+            &mut pending_detail_load,
+        );
         if app.status != last_status {
             app.note_status_changed();
             last_status = app.status.clone();
@@ -140,9 +191,9 @@ fn run_loop(
                         InputOutcome::OpenEditor => open_selected_item_in_editor(terminal, app)?,
                         InputOutcome::EditConsole => edit_console_expression(terminal, app)?,
                         InputOutcome::ClearConsole => app.clear_console(),
-                        InputOutcome::Replay => replay_selected_request(app),
+                        InputOutcome::Replay => replay_selected_request(app, &replay_tx),
                         InputOutcome::EditReplay => {
-                            edit_and_replay_selected_request(terminal, app)?
+                            edit_and_replay_selected_request(terminal, app, &replay_tx)?
                         }
                         InputOutcome::DiffReplay => diff_selected_replay(terminal, app)?,
                         InputOutcome::RefreshPage => refresh_page(app),
@@ -153,6 +204,7 @@ fn run_loop(
                         InputOutcome::DuplicateScript => duplicate_selected_script(app),
                         InputOutcome::RenameScript => rename_selected_script(terminal, app)?,
                         InputOutcome::DeleteScript => delete_selected_script(app),
+                        InputOutcome::ResetScriptTemplates => reset_script_templates(app),
                     }
                     if outcome != InputOutcome::ToggleMaximize
                         && app.layout_mode == layout::LayoutMode::Focused
@@ -431,6 +483,7 @@ fn save_layout_preference(app: &mut WorkbenchState) {
 }
 
 fn save_selected_exchange(app: &mut WorkbenchState) {
+    app.hydrate_selected_request();
     let Some(request) = app.selected_request() else {
         app.status = "no request selected".to_string();
         return;
@@ -484,6 +537,41 @@ fn create_script(
     app.select_script_by_id(&script_id);
     app.status = "created script".to_string();
     Ok(())
+}
+
+fn reset_script_templates(app: &mut WorkbenchState) {
+    match seed_script_templates(app, true).and_then(|added| {
+        app.reload()?;
+        Ok(added)
+    }) {
+        Ok(0) => app.status = "script templates already installed".to_string(),
+        Ok(added) => app.status = format!("installed {added} script templates"),
+        Err(error) => app.status = format!("script template install failed: {error}"),
+    }
+}
+
+fn seed_script_templates(app: &WorkbenchState, force: bool) -> anyhow::Result<usize> {
+    if !force && !app.scripts.is_empty() {
+        return Ok(0);
+    }
+    let store = Store::open(&app.db_path)
+        .with_context(|| format!("open database {}", app.db_path.display()))?;
+    let existing = store
+        .scripts()
+        .context("load existing scripts")?
+        .into_iter()
+        .map(|script| script.name)
+        .collect::<HashSet<_>>();
+    let mut added = 0;
+    for template in SCRIPT_TEMPLATES {
+        if existing.contains(template.name) {
+            continue;
+        }
+        let script = ScriptRecord::new(template.name, template.body);
+        store.save_script(&script).context("save script template")?;
+        added += 1;
+    }
+    Ok(added)
 }
 
 fn edit_selected_script(
@@ -658,27 +746,179 @@ fn next_script_name(app: &WorkbenchState) -> String {
 }
 
 fn default_script_body() -> String {
-    [
-        "// name: Investigate failures",
-        "// Faro scripts run against captured browser data.",
-        "// Temp files use .rs for editor highlighting; execution uses Faro's embedded runtime.",
-        "",
-        "let failed = faros.requests.filter(#{",
-        "    status: #{ gte: 400 }",
-        "});",
-        "",
-        "for req in failed {",
-        "    println(`${req.status} ${req.url}`);",
-        "}",
-        "",
-        "let rows = faros.sql.query(\"SELECT id, method, url, status FROM requests WHERE status >= 500 LIMIT 20\");",
-        "println(rows.len());",
-        "",
-    ]
-    .join("\n")
+    SCRIPT_TEMPLATES
+        .first()
+        .map(|template| template.body.to_string())
+        .unwrap_or_default()
 }
 
-fn replay_selected_request(app: &mut WorkbenchState) {
+struct ScriptTemplate {
+    name: &'static str,
+    body: &'static str,
+}
+
+const SCRIPT_TEMPLATES: &[ScriptTemplate] = &[
+    ScriptTemplate {
+        name: "Investigate failures",
+        body: r#"// name: Investigate failures
+// Find 4xx/5xx requests and print the URL plus captured response snippet.
+// Faro scripts use Rhai: let, for ... in, #{ map: "literal" }.
+
+let failed = faros.requests.filter(#{
+    status: #{ gte: 400 }
+});
+
+println(`failed requests: ${failed.len()}`);
+
+for req in failed {
+    println(`${req.status} ${req.method} ${req.url}`);
+    if req.response_body.len() > 0 {
+        println(req.response_body.sub_string(0, 240));
+    }
+    println("");
+}
+"#,
+    },
+    ScriptTemplate {
+        name: "Slow request leaderboard",
+        body: r#"// name: Slow request leaderboard
+// Print the slowest captured requests using read-only SQL.
+
+let rows = faros.sql.query(`
+    SELECT
+        method,
+        url,
+        responses.status_code AS status,
+        requests.completed_at - requests.started_at AS duration_ms
+    FROM requests
+    LEFT JOIN responses ON responses.request_id = requests.id
+    WHERE requests.completed_at IS NOT NULL
+    ORDER BY duration_ms DESC
+    LIMIT 25
+`);
+
+for row in rows {
+    println(`${row.duration_ms}ms ${row.status} ${row.method} ${row.url}`);
+}
+"#,
+    },
+    ScriptTemplate {
+        name: "Console error digest",
+        body: r#"// name: Console error digest
+// Summarize console errors and fatal logs from the current capture.
+
+let errors = faros.console.errors();
+println(`console errors: ${errors.len()}`);
+
+for log in errors {
+    println(`${log.level} ${log.source}`);
+    println(log.message);
+    println("");
+}
+"#,
+    },
+    ScriptTemplate {
+        name: "Auth state snapshot",
+        body: r#"// name: Auth state snapshot
+// Print likely auth/session data from cookies, localStorage, and sessionStorage.
+
+let needles = ["auth", "token", "session", "jwt", "user", "csrf"];
+
+println("cookies");
+for cookie in faros.cookies.list() {
+    let key = cookie.name.to_lower();
+    for needle in needles {
+        if key.contains(needle) {
+            println(`${cookie.domain} ${cookie.name}=${cookie.value}`);
+        }
+    }
+}
+
+println("");
+println("localStorage");
+for entry in faros.storage.local() {
+    let key = entry.key.to_lower();
+    for needle in needles {
+        if key.contains(needle) {
+            println(`${entry.origin} ${entry.key}=${entry.value}`);
+        }
+    }
+}
+
+println("");
+println("sessionStorage");
+for entry in faros.storage.session() {
+    let key = entry.key.to_lower();
+    for needle in needles {
+        if key.contains(needle) {
+            println(`${entry.origin} ${entry.key}=${entry.value}`);
+        }
+    }
+}
+"#,
+    },
+    ScriptTemplate {
+        name: "API inventory",
+        body: r#"// name: API inventory
+// Group captured API-ish traffic by host, method, status, and normalized route.
+
+let rows = faros.sql.query(`
+    SELECT
+        method,
+        CASE
+            WHEN instr(replace(url, 'https://', ''), '/') = 0 THEN replace(url, 'https://', '')
+            ELSE substr(replace(url, 'https://', ''), 1, instr(replace(url, 'https://', ''), '/') - 1)
+        END AS host,
+        responses.status_code AS status,
+        COUNT(*) AS count
+    FROM requests
+    LEFT JOIN responses ON responses.request_id = requests.id
+    WHERE url LIKE '%/api/%'
+    GROUP BY method, host, status
+    ORDER BY count DESC
+    LIMIT 50
+`);
+
+for row in rows {
+    println(`${row.count}x ${row.status} ${row.method} ${row.host}`);
+}
+"#,
+    },
+    ScriptTemplate {
+        name: "Latest login probe",
+        body: r#"// name: Latest login probe
+// Inspect the latest request whose URL contains /login.
+
+let logins = faros.requests.filter(#{ url: "/login" });
+
+if logins.len() == 0 {
+    println("no /login request captured");
+} else {
+    let login = logins[logins.len() - 1];
+    println(`${login.status} ${login.method} ${login.url}`);
+    println("");
+    println("request body");
+    println(login.body);
+    println("");
+    println("response body");
+    println(login.response_body.sub_string(0, 1000));
+}
+"#,
+    },
+    ScriptTemplate {
+        name: "Reload and smoke check",
+        body: r#"// name: Reload and smoke check
+// Reload the attached page, wait briefly, then print title through CDP.
+
+println(faros.browser.reload());
+sleep(750);
+println(faros.browser.evaluate("document.title"));
+"#,
+    },
+];
+
+fn replay_selected_request(app: &mut WorkbenchState, replay_tx: &mpsc::Sender<ReplayCompletion>) {
+    app.hydrate_selected_request();
     let Some(args) = app.replay_curl_args() else {
         app.status = "no request selected".to_string();
         return;
@@ -694,7 +934,19 @@ fn replay_selected_request(app: &mut WorkbenchState) {
         return;
     }
 
-    replay_with_curl(app, args, session_id, tab_id, run_id, request_id, command);
+    start_replay_with_curl(
+        app,
+        replay_tx,
+        ReplayTask {
+            db_path: app.db_path.clone(),
+            args,
+            session_id,
+            tab_id,
+            run_id,
+            request_id,
+            command,
+        },
+    );
 }
 
 fn edit_console_expression(
@@ -1055,7 +1307,9 @@ fn persist_cookie_edit(
 fn edit_and_replay_selected_request(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut WorkbenchState,
+    replay_tx: &mpsc::Sender<ReplayCompletion>,
 ) -> anyhow::Result<()> {
+    app.hydrate_selected_request();
     let Some(editable) = app.selected_editable_request() else {
         app.status = "no request selected".to_string();
         return Ok(());
@@ -1082,26 +1336,50 @@ fn edit_and_replay_selected_request(
             .collect::<Vec<_>>()
             .join(" ")
     );
-    replay_with_curl(app, args, session_id, tab_id, run_id, request_id, command);
+    start_replay_with_curl(
+        app,
+        replay_tx,
+        ReplayTask {
+            db_path: app.db_path.clone(),
+            args,
+            session_id,
+            tab_id,
+            run_id,
+            request_id,
+            command,
+        },
+    );
     Ok(())
 }
 
-fn replay_with_curl(
+fn start_replay_with_curl(
     app: &mut WorkbenchState,
-    args: Vec<String>,
-    session_id: String,
-    tab_id: Option<String>,
-    run_id: Option<String>,
-    request_id: String,
-    command: String,
+    replay_tx: &mpsc::Sender<ReplayCompletion>,
+    task: ReplayTask,
 ) {
     if !command_exists("curl") {
         app.status = "cannot replay: curl not found".to_string();
         return;
     }
 
-    let mut replay = ReplayRecord::new(session_id, tab_id, run_id, request_id, command);
-    match Command::new("curl").args(&args).output() {
+    let tx = replay_tx.clone();
+    app.status = "replaying request...".to_string();
+    thread::spawn(move || {
+        let completion = run_replay_task(task);
+        let _ = tx.send(completion);
+    });
+}
+
+fn run_replay_task(task: ReplayTask) -> ReplayCompletion {
+    let mut replay = ReplayRecord::new(
+        task.session_id,
+        task.tab_id,
+        task.run_id,
+        task.request_id,
+        task.command,
+    );
+    let request_id = replay.source_request_id.clone();
+    match Command::new("curl").args(&task.args).output() {
         Ok(output) => {
             replay.exit_code = output.status.code().map(i64::from);
             replay.status_code = parse_http_status(&output.stdout);
@@ -1118,44 +1396,50 @@ fn replay_with_curl(
                     if !body_text.is_empty() {
                         let body = inline_text_body(None, body_text);
                         replay.response_body_ref = Some(body.id.clone());
-                        if let Err(error) = persist_replay_body_and_record(app, &body, &replay) {
-                            app.status = format!("replay persisted failed: {error}");
-                            return;
+                        if let Err(error) =
+                            persist_replay_body_and_record_path(&task.db_path, &body, &replay)
+                        {
+                            return ReplayCompletion {
+                                request_id,
+                                status: format!("replay persisted failed: {error}"),
+                            };
                         }
-                    } else if let Err(error) = persist_replay_record(app, &replay) {
-                        app.status = format!("replay persisted failed: {error}");
-                        return;
+                    } else if let Err(error) = persist_replay_record_path(&task.db_path, &replay) {
+                        return ReplayCompletion {
+                            request_id,
+                            status: format!("replay persisted failed: {error}"),
+                        };
                     }
-                    if let Err(error) = app.reload() {
-                        app.status = format!("replayed request; reload failed: {error}");
-                        return;
+                    ReplayCompletion {
+                        request_id,
+                        status: format!(
+                            "replayed request -> {} status {} ({})",
+                            path.display(),
+                            replay
+                                .status_code
+                                .map(|status| status.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                            output.status
+                        ),
                     }
-                    app.status = format!(
-                        "replayed request -> {} status {} ({})",
-                        path.display(),
-                        replay
-                            .status_code
-                            .map(|status| status.to_string())
-                            .unwrap_or_else(|| "-".to_string()),
-                        output.status
-                    )
                 }
-                Err(error) => app.status = format!("replay ran but writing output failed: {error}"),
+                Err(error) => ReplayCompletion {
+                    request_id,
+                    status: format!("replay ran but writing output failed: {error}"),
+                },
             }
         }
         Err(error) => {
             replay.error = Some(error.to_string());
-            match persist_replay_record(app, &replay) {
-                Ok(()) => {
-                    if let Err(error) = app.reload() {
-                        app.status = format!("replay failed; reload failed: {error}");
-                        return;
-                    }
-                    app.status = format!("replay failed: {error}")
-                }
-                Err(store_error) => {
-                    app.status = format!("replay failed: {error}; persist failed: {store_error}")
-                }
+            match persist_replay_record_path(&task.db_path, &replay) {
+                Ok(()) => ReplayCompletion {
+                    request_id,
+                    status: format!("replay failed: {error}"),
+                },
+                Err(store_error) => ReplayCompletion {
+                    request_id,
+                    status: format!("replay failed: {error}; persist failed: {store_error}"),
+                },
             }
         }
     }
@@ -1165,6 +1449,7 @@ fn diff_selected_replay(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut WorkbenchState,
 ) -> anyhow::Result<()> {
+    app.hydrate_selected_request();
     let Some((original, replay)) = app.latest_replay_diff_bodies() else {
         app.status = "no replay body to diff".to_string();
         return Ok(());
@@ -1209,13 +1494,13 @@ fn diff_selected_replay(
     Ok(())
 }
 
-fn persist_replay_body_and_record(
-    app: &WorkbenchState,
+fn persist_replay_body_and_record_path(
+    db_path: &Path,
     body: &faro_core::BodyRecord,
     replay: &ReplayRecord,
 ) -> anyhow::Result<()> {
-    let store = Store::open(&app.db_path)
-        .with_context(|| format!("open database {}", app.db_path.display()))?;
+    let store =
+        Store::open(db_path).with_context(|| format!("open database {}", db_path.display()))?;
     store
         .insert_body(body)
         .context("insert replay response body")?;
@@ -1228,9 +1513,9 @@ fn persist_replay_body_and_record(
     Ok(())
 }
 
-fn persist_replay_record(app: &WorkbenchState, replay: &ReplayRecord) -> anyhow::Result<()> {
-    let store = Store::open(&app.db_path)
-        .with_context(|| format!("open database {}", app.db_path.display()))?;
+fn persist_replay_record_path(db_path: &Path, replay: &ReplayRecord) -> anyhow::Result<()> {
+    let store =
+        Store::open(db_path).with_context(|| format!("open database {}", db_path.display()))?;
     store
         .insert_replay(replay)
         .context("insert replay record")?;
@@ -1250,6 +1535,7 @@ fn open_selected_item_in_editor(
         _ => {}
     }
 
+    app.hydrate_selected_request();
     let body = match app.detail_tab {
         DetailTab::RequestBody => app.selected_request_body_for_editor(),
         _ => app.selected_response_body_for_editor(),
@@ -1629,5 +1915,110 @@ fn drain_capture_updates(
 
     if store_changed && let Err(error) = app.reload() {
         app.status = format!("store reload failed: {error}");
+    }
+}
+
+fn drain_replay_updates(app: &mut WorkbenchState, updates: &mpsc::Receiver<ReplayCompletion>) {
+    while let Ok(update) = updates.try_recv() {
+        match app.refresh_replays_for_request(&update.request_id) {
+            Ok(()) => app.status = update.status,
+            Err(error) => app.status = format!("{}; replay refresh failed: {error}", update.status),
+        }
+    }
+}
+
+fn maybe_start_selected_detail_load(
+    app: &WorkbenchState,
+    tx: &mpsc::Sender<DetailLoadCompletion>,
+    inflight: &mut HashSet<String>,
+    pending: &mut Option<(String, Instant)>,
+) {
+    let Some(task) = selected_detail_load_task(app) else {
+        *pending = None;
+        return;
+    };
+    if inflight.contains(&task.request_id) {
+        return;
+    }
+
+    let now = Instant::now();
+    match pending {
+        Some((request_id, since)) if request_id == &task.request_id => {
+            if now.duration_since(*since) < Duration::from_millis(120) {
+                return;
+            }
+        }
+        _ => {
+            *pending = Some((task.request_id.clone(), now));
+            return;
+        }
+    }
+
+    inflight.insert(task.request_id.clone());
+    *pending = None;
+    let tx = tx.clone();
+    thread::spawn(move || {
+        let request_id = task.request_id.clone();
+        let result = run_detail_load_task(task);
+        let _ = tx.send(DetailLoadCompletion { request_id, result });
+    });
+}
+
+fn selected_detail_load_task(app: &WorkbenchState) -> Option<DetailLoadTask> {
+    let request = app.selected_request()?;
+    if request.details_loaded {
+        return None;
+    }
+    Some(DetailLoadTask {
+        db_path: app.db_path.clone(),
+        request_id: request.request.id.clone(),
+        request_body_ref: request.request.request_body_ref.clone(),
+        response_body_ref: request
+            .response
+            .as_ref()
+            .and_then(|response| response.body_ref.clone()),
+    })
+}
+
+fn run_detail_load_task(task: DetailLoadTask) -> anyhow::Result<DetailLoadResult> {
+    let store = Store::open(&task.db_path)
+        .with_context(|| format!("open database {}", task.db_path.display()))?;
+    let request_body = state::body_text_for_ref(&store, task.request_body_ref.as_deref())?;
+    let response_body = state::body_text_for_ref(&store, task.response_body_ref.as_deref())?;
+    let replays = store
+        .replays_for_request(&task.request_id)?
+        .into_iter()
+        .map(|record| {
+            let body = state::body_text_for_ref(&store, record.response_body_ref.as_deref())
+                .with_context(|| format!("load replay body for {}", record.id))?;
+            anyhow::Ok(ReplayView { record, body })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(DetailLoadResult {
+        request_body,
+        response_body,
+        replays,
+    })
+}
+
+fn drain_detail_updates(
+    app: &mut WorkbenchState,
+    updates: &mpsc::Receiver<DetailLoadCompletion>,
+    inflight: &mut HashSet<String>,
+) {
+    while let Ok(update) = updates.try_recv() {
+        inflight.remove(&update.request_id);
+        match update.result {
+            Ok(details) => app.apply_request_details(
+                &update.request_id,
+                details.request_body,
+                details.response_body,
+                details.replays,
+            ),
+            Err(error) => {
+                app.status = format!("request detail load failed: {error}");
+                app.note_status_changed();
+            }
+        }
     }
 }

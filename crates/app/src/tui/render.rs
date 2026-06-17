@@ -3460,6 +3460,10 @@ fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         ];
     };
 
+    if !request.details_loaded {
+        return detail_not_loaded_lines();
+    }
+
     if request.response_body.is_some() {
         if is_image_request(request) {
             return image_preview_lines(request);
@@ -3467,7 +3471,7 @@ fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         if is_sse_request(request) {
             return sse_body_lines(request);
         }
-        if !app.body_tree_items().is_empty() {
+        if app.focus == FocusPane::Body && !app.body_tree_items().is_empty() {
             return body_tree_lines(app);
         }
         return response_body_content_lines(request, app.focus == FocusPane::Body);
@@ -3597,6 +3601,7 @@ mod tests {
             requests: Vec::new(),
             request_tree_metas: Vec::new(),
             filtered_request_indices: Vec::new(),
+            filtered_route_descendant_counts: std::collections::HashMap::new(),
             collapsed_request_groups: std::collections::HashSet::new(),
             active_request_route_group: None,
             sql_request_filter_ids: None,
@@ -4111,18 +4116,38 @@ fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         DetailTab::RequestHeaders => {
             header_lines("request headers", &request.request.request_headers)
         }
-        DetailTab::RequestBody => body_lines("request body", formatted_request_body(request)),
+        DetailTab::RequestBody if !request.details_loaded => detail_not_loaded_lines(),
+        DetailTab::RequestBody if app.focus == FocusPane::Detail => {
+            body_lines("request body", formatted_request_body(request))
+        }
+        DetailTab::RequestBody => {
+            body_preview_lines("request body", formatted_request_body(request))
+        }
         DetailTab::ResponseHeaders => match request.response.as_ref() {
             Some(response) => header_lines("response headers", &response.response_headers),
             None => vec![Line::raw("No response captured yet.")],
         },
+        DetailTab::ResponseBody if !request.details_loaded => detail_not_loaded_lines(),
         DetailTab::ResponseBody if is_image_request(request) => image_preview_lines(request),
         DetailTab::ResponseBody if is_sse_request(request) => sse_body_lines(request),
-        DetailTab::ResponseBody if !app.body_tree_items().is_empty() => body_tree_lines(app),
+        DetailTab::ResponseBody
+            if app.focus == FocusPane::Detail && !app.body_tree_items().is_empty() =>
+        {
+            body_tree_lines(app)
+        }
         DetailTab::ResponseBody => response_body_lines(request, app.focus == FocusPane::Detail),
         DetailTab::Timing => timing_lines(request),
+        DetailTab::Replay if !request.details_loaded => detail_not_loaded_lines(),
         DetailTab::Replay => replay_lines(request),
     }
+}
+
+fn detail_not_loaded_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::styled("detail not loaded", label_style()),
+        Line::raw(""),
+        Line::raw("Focus this pane to load body and replay details."),
+    ]
 }
 
 fn overview_lines(request: &RequestView) -> Vec<Line<'static>> {
@@ -4486,6 +4511,16 @@ fn body_lines(title: &'static str, body: String) -> Vec<Line<'static>> {
     lines
 }
 
+fn body_preview_lines(title: &'static str, body: String) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::styled(title, label_style()), Line::raw("")];
+    lines.extend(
+        body.lines()
+            .take(80)
+            .map(|line| Line::styled(line.to_string(), Style::default().fg(GB_FG))),
+    );
+    lines
+}
+
 fn response_body_lines(request: &RequestView, active: bool) -> Vec<Line<'static>> {
     let mut lines = vec![Line::styled("response body", label_style()), Line::raw("")];
     lines.extend(response_body_content_lines(request, active));
@@ -4498,6 +4533,7 @@ fn response_body_content_lines(request: &RequestView, active: bool) -> Vec<Line<
         syntax_body_lines_for_request(request, body)
     } else {
         body.lines()
+            .take(80)
             .map(|line| Line::styled(line.to_string(), Style::default().fg(GB_FG)))
             .collect()
     }

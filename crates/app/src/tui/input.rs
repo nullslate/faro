@@ -24,6 +24,7 @@ pub(crate) enum InputOutcome {
     DuplicateScript,
     RenameScript,
     DeleteScript,
+    ResetScriptTemplates,
 }
 
 pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
@@ -317,5 +318,6 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
         PaletteCommand::DuplicateScript => InputOutcome::DuplicateScript,
         PaletteCommand::RenameScript => InputOutcome::RenameScript,
         PaletteCommand::DeleteScript => InputOutcome::DeleteScript,
+        PaletteCommand::ResetScriptTemplates => InputOutcome::ResetScriptTemplates,
     }
 }
