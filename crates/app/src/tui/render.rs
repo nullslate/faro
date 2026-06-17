@@ -18,15 +18,17 @@ use ratatui::widgets::{
     Block, Borders, Cell, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
 };
 
-const GB_FG: Color = Color::Rgb(212, 190, 152);
+const GB_FG: Color = Color::Rgb(235, 219, 178);
 const GB_MUTED: Color = Color::Rgb(146, 131, 116);
-const GB_BG2: Color = Color::Rgb(60, 56, 54);
+const GB_BG2: Color = Color::Rgb(58, 58, 54);
 const GB_RED: Color = Color::Rgb(234, 105, 98);
 const GB_GREEN: Color = Color::Rgb(169, 182, 101);
 const GB_YELLOW: Color = Color::Rgb(216, 166, 87);
 const GB_BLUE: Color = Color::Rgb(125, 174, 163);
 const GB_PURPLE: Color = Color::Rgb(211, 134, 155);
 const GB_AQUA: Color = Color::Rgb(137, 180, 130);
+const GB_ORANGE: Color = Color::Rgb(231, 138, 78);
+const GB_FAINT: Color = Color::Rgb(102, 92, 84);
 
 pub(crate) fn render(frame: &mut ratatui::Frame, app: &mut WorkbenchState) {
     let root = Layout::default()
@@ -59,16 +61,7 @@ pub(crate) fn render(frame: &mut ratatui::Frame, app: &mut WorkbenchState) {
 }
 
 fn render_normal_layout(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
-    if area.width >= 108 {
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(7), Constraint::Min(40)])
-            .split(area);
-        render_view_rail(frame, columns[0], app);
-        render_normal_content(frame, columns[1], app);
-    } else {
-        render_normal_content(frame, area, app);
-    }
+    render_normal_content(frame, area, app);
 }
 
 fn render_normal_content(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
@@ -80,73 +73,6 @@ fn render_normal_content(frame: &mut ratatui::Frame, area: Rect, app: &mut Workb
         WorkbenchView::Storage => render_storage(frame, area, app),
         WorkbenchView::Cookies => render_cookies(frame, area, app),
     }
-}
-
-fn render_view_rail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let lines = vec![
-        rail_item(
-            "N",
-            app.requests.len(),
-            app.view == WorkbenchView::Network,
-            false,
-        ),
-        rail_item(
-            "C",
-            app.console_logs.len(),
-            app.view == WorkbenchView::Console,
-            console_error_count(app) > 0,
-        ),
-        rail_item(
-            "W",
-            app.websocket_frames.len(),
-            app.view == WorkbenchView::WebSockets,
-            false,
-        ),
-        rail_item(
-            "X",
-            app.scripts.len(),
-            app.view == WorkbenchView::Scripts,
-            false,
-        ),
-        rail_item(
-            "S",
-            app.storage_events.len(),
-            app.view == WorkbenchView::Storage,
-            false,
-        ),
-        rail_item(
-            "K",
-            cookie_count(app),
-            app.view == WorkbenchView::Cookies,
-            false,
-        ),
-        Line::raw(""),
-        Line::from(vec![Span::styled("p", key_style())]),
-        Line::from(vec![Span::styled("?", key_style())]),
-    ];
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(panel_block("", false))
-            .style(Style::default().fg(GB_FG)),
-        area,
-    );
-}
-
-fn rail_item(label: &'static str, count: usize, active: bool, alert: bool) -> Line<'static> {
-    let style = if active {
-        Style::default()
-            .fg(Color::Black)
-            .bg(GB_GREEN)
-            .add_modifier(Modifier::BOLD)
-    } else if alert {
-        Style::default().fg(GB_RED).add_modifier(Modifier::BOLD)
-    } else {
-        muted_style()
-    };
-    Line::from(vec![Span::styled(
-        format!("{label} {:>3}", count.min(999)),
-        style,
-    )])
 }
 
 fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
@@ -216,6 +142,7 @@ fn render_focused_layout(frame: &mut ratatui::Frame, area: Rect, app: &mut Workb
 }
 
 fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
+    let header_bg = Color::Rgb(29, 32, 33);
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(1)])
@@ -224,8 +151,8 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         Span::styled(
             " faro ",
             Style::default()
-                .fg(GB_GREEN)
-                .bg(Color::Black)
+                .fg(header_bg)
+                .bg(app.config.theme.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
@@ -237,65 +164,88 @@ fn render_header(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         full_header_spans(app)
     });
     let title = Line::from(title_spans);
-    let block = Paragraph::new(title).style(Style::default().bg(Color::Black));
+    let block = Paragraph::new(title).style(Style::default().bg(header_bg));
     frame.render_widget(block, rows[0]);
     frame.render_widget(
-        Paragraph::new(view_tabs_line(app)).style(Style::default().fg(GB_FG)),
+        Paragraph::new(view_tabs_line(app)).style(Style::default().fg(GB_FG).bg(header_bg)),
         rows[1],
     );
 }
 
 fn view_tabs_line(app: &WorkbenchState) -> Line<'static> {
-    Line::from(vec![
-        view_tab(
+    let mut spans = Vec::new();
+    for (index, tab) in [
+        (
             "1",
             format!("Net {}", app.requests.len()),
             app.view == WorkbenchView::Network,
         ),
-        Span::raw(" "),
-        view_tab(
+        (
             "2",
             format!("Console {}", console_error_badge(app)),
             app.view == WorkbenchView::Console,
         ),
-        Span::raw(" "),
-        view_tab(
+        (
             "3",
             format!("WS {}", app.websocket_frames.len()),
             app.view == WorkbenchView::WebSockets,
         ),
-        Span::raw(" "),
-        view_tab(
+        (
             "4",
             format!("Scripts {}", app.scripts.len()),
             app.view == WorkbenchView::Scripts,
         ),
-        Span::raw(" "),
-        view_tab(
+        (
             "5",
             format!("Storage {}", app.storage_events.len()),
             app.view == WorkbenchView::Storage,
         ),
-        Span::raw(" "),
-        view_tab(
+        (
             "6",
             format!("Cookies {}", cookie_count(app)),
             app.view == WorkbenchView::Cookies,
         ),
-    ])
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        spans.extend(view_tab_spans(tab.0, tab.1, tab.2, &app.config.theme));
+    }
+    Line::from(spans)
 }
 
-fn view_tab(key: &'static str, label: String, active: bool) -> Span<'static> {
+fn view_tab_spans(
+    key: &'static str,
+    label: String,
+    active: bool,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let header_bg = Color::Rgb(29, 32, 33);
     if active {
-        Span::styled(
-            format!(" {key} {label} "),
-            Style::default()
-                .fg(Color::Black)
-                .bg(GB_GREEN)
-                .add_modifier(Modifier::BOLD),
-        )
+        vec![
+            Span::styled(
+                format!(" {key} "),
+                Style::default()
+                    .fg(header_bg)
+                    .bg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {label} "),
+                Style::default()
+                    .fg(theme.text)
+                    .bg(GB_BG2)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
     } else {
-        Span::styled(format!(" {key} {label} "), muted_style())
+        vec![Span::styled(
+            format!(" {key} {label} "),
+            Style::default().fg(theme.muted).bg(header_bg),
+        )]
     }
 }
 
@@ -534,7 +484,7 @@ fn render_stats_panel(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
 
 fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
     let highlight_terms = filter_highlight_terms(&app.request_filter);
-    let rows = if app.filtered_request_indices.is_empty() {
+    let rows = if app.filtered_request_rows.is_empty() {
         vec![
             Row::new([
                 Cell::from(" "),
@@ -549,31 +499,19 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
             .style(muted_style()),
         ]
     } else {
-        let total = app.filtered_request_indices.len();
+        let total = app.filtered_request_rows.len();
         let visible_rows = visible_request_rows(area);
         let selected = app.table_state.selected().unwrap_or(0).min(total - 1);
         let offset = request_window_start(selected, visible_rows, total);
         let end = offset.saturating_add(visible_rows).min(total);
         let has_more_below = end < total;
-        app.filtered_request_indices
+        app.filtered_request_rows
             .get(offset..end)
             .unwrap_or(&[])
             .iter()
             .enumerate()
-            .map(|(visible_index, index)| {
+            .filter_map(|(visible_index, index)| {
                 let row_index = offset + visible_index;
-                let request = &app.requests[*index];
-                let resource_type = request
-                    .request
-                    .resource_type
-                    .clone()
-                    .unwrap_or_else(|| "-".to_string());
-                let tree_meta = app.request_tree_meta(*index);
-                let can_drill_down = app.request_can_drill_down(*index);
-                let domain = domain_for_url(&request.request.url);
-                let path = app
-                    .request_route_remainder(*index)
-                    .unwrap_or_else(|| path_for_url(&request.request.url));
                 let fade = bottom_overlay_fade(
                     row_index,
                     offset,
@@ -583,45 +521,65 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
                 );
                 let theme = &app.config.theme;
                 let base_style = fade.base_style(theme);
-                Row::new([
-                    Cell::from(request_tree_marker(
-                        row_index,
-                        total,
-                        tree_meta.as_ref(),
-                        can_drill_down,
-                        fade,
-                        theme,
-                    )),
-                    Cell::from(status_text(request)).style(status_style(
-                        request.status_code(),
-                        fade,
-                        theme,
-                    )),
-                    Cell::from(highlight_text(&request.request.method, &highlight_terms))
-                        .style(method_style(&request.request.method, fade, theme)),
-                    Cell::from(highlight_text(&resource_type, &highlight_terms))
-                        .style(resource_style(&resource_type, fade, theme)),
-                    Cell::from(highlight_text(&domain, &highlight_terms))
-                        .style(fade.secondary_style(theme)),
-                    Cell::from(highlight_text(&path, &highlight_terms)).style(base_style),
-                    Cell::from(
-                        request
-                            .duration_ms()
-                            .map(|duration| format!("{duration}ms"))
-                            .unwrap_or_else(|| "-".to_string()),
-                    )
-                    .style(duration_style(request.duration_ms(), fade, theme)),
-                    Cell::from(
-                        request
-                            .response
-                            .as_ref()
-                            .and_then(|response| response.body_size)
-                            .map(format_bytes)
-                            .unwrap_or_else(|| "-".to_string()),
-                    )
-                    .style(fade.accent_style(theme.resource_image)),
-                ])
-                .style(base_style)
+                let request = app.requests.get(*index)?;
+                let resource_type = request
+                    .request
+                    .resource_type
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string());
+                let resource_label = resource_label(&resource_type);
+                let tree_meta = app.request_tree_meta(*index);
+                let can_drill_down = app.request_can_drill_down(*index);
+                let domain = domain_for_url(&request.request.url);
+                let path = app
+                    .request_route_remainder(*index)
+                    .unwrap_or_else(|| path_for_url(&request.request.url));
+                Some(
+                    Row::new([
+                        Cell::from(request_tree_marker(
+                            row_index,
+                            total,
+                            tree_meta.as_ref(),
+                            can_drill_down,
+                            fade,
+                            theme,
+                        )),
+                        Cell::from(Span::styled(
+                            status_text(request),
+                            status_style(request.status_code(), fade, theme),
+                        )),
+                        Cell::from(highlight_text(&request.request.method, &highlight_terms))
+                            .style(method_style(&request.request.method, fade, theme)),
+                        Cell::from(highlight_text(resource_label, &highlight_terms))
+                            .style(resource_style(&resource_type, fade, theme)),
+                        Cell::from(highlight_text(&domain, &highlight_terms))
+                            .style(fade.secondary_style(theme)),
+                        Cell::from(highlight_text(&path, &highlight_terms)).style(base_style),
+                        Cell::from(match request.duration_ms() {
+                            Some(duration) => {
+                                let mut spans = vec![Span::styled(
+                                    format!("{duration}ms "),
+                                    duration_style(Some(duration), fade, theme),
+                                )];
+                                spans.extend(latency_bar(duration, theme));
+                                Line::from(spans)
+                            }
+                            None => {
+                                Line::from(Span::styled("-", duration_style(None, fade, theme)))
+                            }
+                        }),
+                        Cell::from(
+                            request
+                                .response
+                                .as_ref()
+                                .and_then(|response| response.body_size)
+                                .map(format_bytes)
+                                .unwrap_or_else(|| "-".to_string()),
+                        )
+                        .style(fade.accent_style(theme.resource_image)),
+                    ])
+                    .style(base_style),
+                )
             })
             .collect()
     };
@@ -629,19 +587,19 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     let table = Table::new(
         rows,
         [
+            Constraint::Length(3),
+            Constraint::Length(5),
             Constraint::Length(8),
-            Constraint::Length(4),
-            Constraint::Length(8),
-            Constraint::Length(10),
-            Constraint::Length(16),
+            Constraint::Length(7),
+            Constraint::Length(20),
             Constraint::Min(24),
-            Constraint::Length(8),
+            Constraint::Length(11),
             Constraint::Length(8),
         ],
     )
     .header(
         Row::new([
-            "TREE", "CODE", "METHOD", "TYPE", "DOMAIN", "PATH", "TIME", "SIZE",
+            ">", "CODE", "METHOD", "TYPE", "DOMAIN", "PATH", "TIME", "SIZE",
         ])
         .style(muted_style().add_modifier(Modifier::BOLD)),
     )
@@ -653,11 +611,10 @@ fn render_requests(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchSt
     ))
     .row_highlight_style(
         Style::default()
-            .bg(Color::Black)
-            .fg(app.config.theme.text)
+            .fg(app.config.theme.active_border)
             .add_modifier(Modifier::BOLD),
     )
-    .highlight_symbol("  ");
+    .highlight_symbol("▎ ");
 
     let mut visible_state = visible_request_table_state(app, visible_request_rows(area));
     frame.render_stateful_widget(table, area, &mut visible_state);
@@ -678,7 +635,7 @@ fn request_window_start(selected: usize, visible_rows: usize, total: usize) -> u
 }
 
 fn visible_request_table_state(app: &WorkbenchState, visible_rows: usize) -> TableState {
-    let total = app.filtered_request_indices.len();
+    let total = app.filtered_request_rows.len();
     let selected = app
         .table_state
         .selected()
@@ -922,12 +879,76 @@ fn console_detail_lines(log: &ConsoleLog) -> Vec<Line<'static>> {
     if let Some(stack) = &log.stack_json {
         lines.push(Line::raw(""));
         lines.push(Line::styled("stack", label_style()));
-        lines.extend(syntax_body_lines(
-            serde_json::to_string_pretty(stack).unwrap_or_else(|_| stack.to_string()),
-        ));
+        lines.extend(console_stack_lines(stack));
     }
 
     lines
+}
+
+fn console_stack_lines(stack: &serde_json::Value) -> Vec<Line<'static>> {
+    let Some(frames) = stack_frames(stack) else {
+        return syntax_body_lines(
+            serde_json::to_string_pretty(stack).unwrap_or_else(|_| stack.to_string()),
+        );
+    };
+    if frames.is_empty() {
+        return vec![Line::styled("  no frames", muted_style())];
+    }
+
+    frames
+        .iter()
+        .take(24)
+        .enumerate()
+        .map(|(index, frame)| {
+            let function = json_string_field(frame, "functionName")
+                .or_else(|| json_string_field(frame, "function"))
+                .unwrap_or("(anonymous)");
+            let url = json_string_field(frame, "url")
+                .or_else(|| json_string_field(frame, "scriptId"))
+                .unwrap_or("-");
+            let line = json_i64_field(frame, "lineNumber")
+                .or_else(|| json_i64_field(frame, "line"))
+                .map(|value| value + 1);
+            let column = json_i64_field(frame, "columnNumber")
+                .or_else(|| json_i64_field(frame, "column"))
+                .map(|value| value + 1);
+            Line::from(vec![
+                Span::styled(format!("{:>2} ", index + 1), muted_style()),
+                Span::styled(compact_value(function, 36), Style::default().fg(GB_AQUA)),
+                Span::styled("  at ", muted_style()),
+                Span::styled(compact_value(url, 72), Style::default().fg(GB_FG)),
+                Span::styled(
+                    match (line, column) {
+                        (Some(line), Some(column)) => format!(":{line}:{column}"),
+                        (Some(line), None) => format!(":{line}"),
+                        _ => String::new(),
+                    },
+                    muted_style(),
+                ),
+            ])
+        })
+        .collect()
+}
+
+fn stack_frames(stack: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    stack
+        .get("callFrames")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| {
+            stack
+                .get("stack")
+                .and_then(|value| value.get("callFrames"))
+                .and_then(serde_json::Value::as_array)
+        })
+        .or_else(|| stack.as_array())
+}
+
+fn json_string_field<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    value.get(field).and_then(serde_json::Value::as_str)
+}
+
+fn json_i64_field(value: &serde_json::Value, field: &str) -> Option<i64> {
+    value.get(field).and_then(serde_json::Value::as_i64)
 }
 
 fn render_websockets(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
@@ -1355,21 +1376,15 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let keys = if app.input_mode == InputMode::Filtering {
         filter_help_line()
     } else {
-        compact_help_line()
+        compact_help_line(app)
     };
     let mut status_spans = vec![
-        Span::styled("view ", label_style()),
-        Span::raw(app.view.label()),
-        Span::raw("  "),
-        Span::styled("focus ", label_style()),
-        Span::raw(app.focus.label()),
+        Span::styled("status ", label_style()),
+        Span::raw(transient_status(app)),
     ];
 
     if app.view == WorkbenchView::Network {
         status_spans.extend([
-            Span::raw("  "),
-            Span::styled("tab ", label_style()),
-            Span::raw(app.detail_tab.label()),
             Span::raw("  "),
             Span::styled("sort ", label_style()),
             Span::raw(format!(
@@ -1380,6 +1395,14 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         ]);
     }
 
+    let active_filters = active_filter_count(app);
+    if active_filters > 0 {
+        status_spans.extend([
+            Span::raw("  "),
+            Span::styled("filters ", label_style()),
+            Span::raw(active_filters.to_string()),
+        ]);
+    }
     if app.input_mode != InputMode::Normal {
         status_spans.extend([
             Span::raw("  "),
@@ -1392,21 +1415,6 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
             Span::raw("  "),
             Span::styled("layout ", label_style()),
             Span::raw(app.layout_mode.label()),
-        ]);
-    }
-
-    status_spans.extend([
-        Span::raw("  "),
-        Span::styled("status ", label_style()),
-        Span::raw(transient_status(app)),
-    ]);
-
-    let active_filters = active_filter_count(app);
-    if active_filters > 0 {
-        status_spans.extend([
-            Span::raw("  "),
-            Span::styled("filters ", label_style()),
-            Span::raw(active_filters.to_string()),
         ]);
     }
 
@@ -1438,29 +1446,95 @@ fn filter_help_line() -> Line<'static> {
     ])
 }
 
-fn compact_help_line() -> Line<'static> {
-    Line::from(vec![
-        Span::styled("p", key_style()),
-        Span::raw(" palette  "),
-        Span::styled("q", key_style()),
-        Span::raw(" quit  "),
-        Span::styled("/", key_style()),
-        Span::raw(" filter  "),
-        Span::styled("1-5", key_style()),
-        Span::raw(" views  "),
-        Span::styled("enter", key_style()),
-        Span::raw(" route  "),
-        Span::styled("backspace", key_style()),
-        Span::raw(" up  "),
-        Span::styled("j/k", key_style()),
-        Span::raw(" move  "),
-        Span::styled("?", key_style()),
-        Span::raw(" keys"),
-    ])
+fn compact_help_line(app: &WorkbenchState) -> Line<'static> {
+    // Show the keys that matter for the pane the user is actually in.
+    match app.focus {
+        FocusPane::Console => key_hints(&[
+            ("e", "eval"),
+            ("c", "clear"),
+            ("j/k", "select"),
+            ("u/d", "scroll"),
+            ("/", "filter"),
+            ("?", "keys"),
+        ]),
+        FocusPane::WebSockets => key_hints(&[
+            ("j/k", "select"),
+            ("u/d", "payload"),
+            ("g/G", "ends"),
+            ("/", "filter"),
+            ("?", "keys"),
+        ]),
+        FocusPane::Scripts => key_hints(&[
+            ("n", "new"),
+            ("e", "edit"),
+            ("r", "run"),
+            ("D", "dup"),
+            ("x", "delete"),
+            ("?", "keys"),
+        ]),
+        FocusPane::Storage | FocusPane::Cookies => key_hints(&[
+            ("e", "edit"),
+            ("x", "delete"),
+            ("tab", "origin"),
+            ("j/k", "select"),
+            ("/", "filter"),
+            ("?", "keys"),
+        ]),
+        FocusPane::Detail | FocusPane::Body => key_hints(&[
+            ("h/l", "tabs"),
+            ("u/d", "scroll"),
+            ("g/G", "ends"),
+            ("e", "editor"),
+            ("y", "curl"),
+            ("?", "keys"),
+        ]),
+        FocusPane::Requests => key_hints(&[
+            ("j/k", "move"),
+            ("enter", "route"),
+            ("backspace", "up"),
+            ("h/l", "tabs"),
+            ("/", "filter"),
+            ("r", "replay"),
+            ("p", "palette"),
+            ("?", "keys"),
+        ]),
+    }
+}
+
+fn key_hints(hints: &[(&str, &str)]) -> Line<'static> {
+    let mut spans = Vec::with_capacity(hints.len() * 3);
+    for (index, (key, label)) in hints.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(key.to_string(), key_style()));
+        spans.push(Span::raw(format!(" {label}")));
+    }
+    Line::from(spans)
+}
+
+fn latency_bar(ms: i64, theme: &Theme) -> Vec<Span<'static>> {
+    const WIDTH: usize = 3;
+    let (filled, color) = match ms {
+        ..=50 => (1, theme.ok),
+        51..=100 => (1, theme.ok),
+        101..=200 => (1, theme.redirect),
+        201..=400 => (2, theme.client_error),
+        401..=800 => (2, theme.client_error),
+        801..=1_500 => (3, GB_ORANGE),
+        _ => (3, theme.server_error),
+    };
+    vec![
+        Span::styled(
+            "━".repeat(filled),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("─".repeat(WIDTH - filled), Style::default().fg(GB_FAINT)),
+    ]
 }
 
 pub(super) fn label_style() -> Style {
-    Style::default().fg(GB_YELLOW).add_modifier(Modifier::BOLD)
+    Style::default().fg(GB_YELLOW)
 }
 
 pub(super) fn key_style() -> Style {
@@ -1657,7 +1731,7 @@ fn status_meter_line(stats: &RequestStats) -> Line<'static> {
             spans.push(Span::raw(" "));
         }
         spans.push(Span::styled(format!("{label} "), muted_style()));
-        spans.extend(segment_bar(count, total, 10, color));
+        spans.extend(segment_bar(count, total, 8, color));
     }
     Line::from(spans)
 }
@@ -1665,13 +1739,11 @@ fn status_meter_line(stats: &RequestStats) -> Line<'static> {
 fn segment_bar(count: usize, total: usize, width: usize, color: Color) -> Vec<Span<'static>> {
     let filled = (count * width).div_ceil(total);
     vec![
-        Span::styled("[".to_string(), Style::default().fg(GB_BG2)),
-        Span::styled("■".repeat(filled), Style::default().fg(color)),
+        Span::styled("━".repeat(filled), Style::default().fg(color)),
         Span::styled(
-            "·".repeat(width.saturating_sub(filled)),
+            "─".repeat(width.saturating_sub(filled)),
             Style::default().fg(GB_BG2),
         ),
-        Span::styled("]".to_string(), Style::default().fg(GB_BG2)),
     ]
 }
 
@@ -2032,19 +2104,17 @@ fn color_rgb(color: Color) -> (u8, u8, u8) {
 }
 
 fn request_tree_marker(
-    row_index: usize,
-    total: usize,
+    _row_index: usize,
+    _total: usize,
     meta: Option<&RequestTreeMeta>,
     can_drill_down: bool,
     fade: RowFade,
     theme: &Theme,
 ) -> Line<'static> {
-    let branch = if row_index + 1 == total { "└" } else { "├" };
-    let branch_style = fade.accent_style(theme.tree_edge);
     let indent = meta
         .map(|meta| "  ".repeat(meta.depth.saturating_sub(1).min(6)))
         .unwrap_or_default();
-    let dot = if can_drill_down { "●" } else { " " };
+    let dot = if can_drill_down { "›" } else { "" };
     let dot_style = if can_drill_down {
         fade.accent_style(theme.active_border)
             .add_modifier(Modifier::BOLD)
@@ -2053,8 +2123,6 @@ fn request_tree_marker(
     };
 
     Line::from(vec![
-        Span::styled(branch.to_string(), branch_style),
-        Span::styled("─".to_string(), fade.secondary_style(theme)),
         Span::styled(dot.to_string(), dot_style),
         Span::raw(indent),
     ])
@@ -2083,6 +2151,24 @@ fn resource_style(resource_type: &str, fade: RowFade, theme: &Theme) -> Style {
         "eventsource" => fade.accent_style(theme.resource_sse),
         "document" => fade.base_style(theme),
         _ => fade.secondary_style(theme),
+    }
+}
+
+fn resource_label(resource_type: &str) -> &'static str {
+    match resource_type {
+        "document" => "Doc",
+        "stylesheet" => "CSS",
+        "script" => "JS",
+        "image" => "Img",
+        "xhr" => "XHR",
+        "fetch" => "Fetch",
+        "eventsource" => "SSE",
+        "websocket" => "WS",
+        "manifest" => "Man",
+        "font" => "Font",
+        "media" => "Media",
+        "" | "-" => "-",
+        _ => "Other",
     }
 }
 
@@ -2994,11 +3080,7 @@ fn json_punctuation_style() -> Style {
 
 fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
     let Some(request) = app.selected_request() else {
-        return vec![
-            Line::styled("no request selected", label_style()),
-            Line::raw(""),
-            Line::raw("Capture traffic or move to a request with j/k."),
-        ];
+        return empty_state_lines("no request selected", "capture traffic or move with j/k");
     };
 
     if !request.details_loaded {
@@ -3019,10 +3101,11 @@ fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
     }
 
     let mut lines = vec![
-        Line::styled("no response body captured", warning_style()),
+        Line::styled("no response body", warning_style()),
+        Line::styled("metadata for the selected request", muted_style()),
         Line::raw(""),
         labeled_line("method", request.request.method.clone()),
-        labeled_line("url", request.request.url.clone()),
+        labeled_line("url", compact_value(&request.request.url, 140)),
         labeled_line(
             "status",
             request
@@ -3093,10 +3176,7 @@ fn body_tree_line(item: &BodyTreeItem, selected: bool) -> Line<'static> {
         "·"
     };
     let base = if selected {
-        Style::default()
-            .fg(Color::Black)
-            .bg(GB_YELLOW)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(GB_GREEN).add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(GB_FG)
     };
@@ -3142,6 +3222,7 @@ mod tests {
             requests: Vec::new(),
             request_tree_metas: Vec::new(),
             filtered_request_indices: Vec::new(),
+            filtered_request_rows: Vec::new(),
             filtered_route_descendant_counts: std::collections::HashMap::new(),
             collapsed_request_groups: std::collections::HashSet::new(),
             active_request_route_group: None,
@@ -3473,6 +3554,45 @@ mod tests {
     }
 
     #[test]
+    fn response_body_content_lines_adds_line_number_gutter_when_active() {
+        let mut request = response_request("application/json", "fetch", "https://example.test/api");
+        request.response_body = Some("{\n  \"ok\": true\n}".to_string());
+
+        let lines = response_body_content_lines(&request, true);
+
+        assert_eq!(lines[0].spans[0].content.as_ref(), "  1 ");
+        assert_eq!(lines[0].spans[1].content.as_ref(), "│ ");
+        assert!(
+            lines[1]
+                .spans
+                .iter()
+                .any(|span| span.content.as_ref() == r#""ok""#)
+        );
+    }
+
+    #[test]
+    fn console_stack_lines_formats_call_frames() {
+        let stack = serde_json::json!({
+            "callFrames": [{
+                "functionName": "loadUser",
+                "url": "https://example.test/app.js",
+                "lineNumber": 41,
+                "columnNumber": 7
+            }]
+        });
+
+        let text = console_stack_lines(&stack)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("loadUser"));
+        assert!(text.contains("https://example.test/app.js"));
+        assert!(text.contains(":42:8"));
+    }
+
+    #[test]
     fn script_output_lines_highlight_selected_script_source() {
         let mut app = state_with_storage(Vec::new(), Vec::new());
         app.scripts.push(ScriptRecord::new(
@@ -3493,7 +3613,7 @@ mod tests {
     }
 
     #[test]
-    fn response_body_syntax_only_applies_when_active() {
+    fn response_body_syntax_applies_when_inactive_too() {
         let request = response_request("text/css", "stylesheet", "https://example.test/app.css");
         let body = ".shell { color: #d4be98; }";
         let mut active_request = request;
@@ -3508,8 +3628,14 @@ mod tests {
                 .iter()
                 .any(|span| span.content.as_ref() == "color")
         );
-        assert_eq!(inactive[0].spans.len(), 1);
-        assert_eq!(inactive[0].spans[0].content.as_ref(), body);
+        assert!(
+            inactive[0]
+                .spans
+                .iter()
+                .any(|span| span.content.as_ref() == "color")
+        );
+        assert_eq!(active[0].spans[0].content.as_ref(), "  1 ");
+        assert_ne!(inactive[0].spans[0].content.as_ref(), "  1 ");
     }
 
     #[test]
@@ -3521,12 +3647,17 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
 
-        assert!(text.contains("1 Net"));
-        assert!(text.contains("2 Console"));
-        assert!(text.contains("3 WS"));
-        assert!(text.contains("4 Scripts"));
-        assert!(text.contains("5 Storage"));
-        assert!(text.contains("6 Cookies"));
+        for expected in [
+            "1",
+            "Net",
+            "2 Console",
+            "3 WS",
+            "4 Scripts",
+            "5 Storage",
+            "6 Cookies",
+        ] {
+            assert!(text.contains(expected));
+        }
     }
 
     #[test]
@@ -3573,10 +3704,10 @@ mod tests {
                 .map(|span| span.content.as_ref())
                 .collect::<String>();
 
-        assert_eq!(parent_text, "├─●");
-        assert_eq!(leaf_text, "└─ ");
-        assert!(deep_parent_text.starts_with("└─●"));
-        assert!(non_drillable_parent_text.starts_with("└─ "));
+        assert_eq!(parent_text, "›");
+        assert_eq!(leaf_text, "");
+        assert!(deep_parent_text.starts_with("›"));
+        assert!(!non_drillable_parent_text.contains('›'));
     }
 
     #[test]
@@ -3653,7 +3784,7 @@ mod tests {
 
 fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
     let Some(request) = app.selected_request() else {
-        return vec![Line::raw("No requests captured yet.")];
+        return empty_state_lines("no request selected", "capture traffic or move with j/k");
     };
 
     match app.detail_tab {
@@ -3670,7 +3801,7 @@ fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         }
         DetailTab::ResponseHeaders => match request.response.as_ref() {
             Some(response) => header_lines("response headers", &response.response_headers),
-            None => vec![Line::raw("No response captured yet.")],
+            None => empty_state_lines("no response captured", "refresh while capture is active"),
         },
         DetailTab::ResponseBody if !request.details_loaded => detail_not_loaded_lines(),
         DetailTab::ResponseBody if is_image_request(request) => image_preview_lines(request),
@@ -3688,17 +3819,16 @@ fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
 }
 
 fn detail_not_loaded_lines() -> Vec<Line<'static>> {
-    vec![
-        Line::styled("detail not loaded", label_style()),
-        Line::raw(""),
-        Line::raw("Focus this pane to load body and replay details."),
-    ]
+    empty_state_lines(
+        "detail not loaded",
+        "focus this pane to load body and replay details",
+    )
 }
 
 fn overview_lines(request: &RequestView) -> Vec<Line<'static>> {
     let mut lines = vec![
         labeled_line("method", request.request.method.clone()),
-        labeled_line("url", request.request.url.clone()),
+        labeled_line("url", compact_value(&request.request.url, 140)),
         labeled_line("state", format!("{:?}", request.request.status)),
         labeled_line("domain", domain_for_url(&request.request.url)),
         labeled_line("path", path_for_url(&request.request.url)),
@@ -3724,7 +3854,9 @@ fn overview_lines(request: &RequestView) -> Vec<Line<'static>> {
             request
                 .request
                 .resource_type
-                .clone()
+                .as_deref()
+                .map(resource_label)
+                .map(str::to_string)
                 .unwrap_or_else(|| "-".to_string()),
         ),
         labeled_line(
@@ -3733,7 +3865,7 @@ fn overview_lines(request: &RequestView) -> Vec<Line<'static>> {
                 .response
                 .as_ref()
                 .and_then(|response| response.body_size)
-                .map(|bytes| format!("{bytes} bytes"))
+                .map(format_bytes)
                 .unwrap_or_else(|| "-".to_string()),
         ),
         labeled_line(
@@ -4074,14 +4206,28 @@ fn response_body_lines(request: &RequestView, active: bool) -> Vec<Line<'static>
 
 fn response_body_content_lines(request: &RequestView, active: bool) -> Vec<Line<'static>> {
     let body = formatted_response_body(request);
+    let lines = syntax_body_lines_for_request(request, body);
     if active {
-        syntax_body_lines_for_request(request, body)
+        numbered_lines(lines)
     } else {
-        body.lines()
-            .take(80)
-            .map(|line| Line::styled(line.to_string(), Style::default().fg(GB_FG)))
-            .collect()
+        lines.into_iter().take(80).collect()
     }
+}
+
+fn numbered_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    let width = lines.len().max(1).to_string().len().max(3);
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let mut spans = vec![
+                Span::styled(format!("{:>width$} ", index + 1), muted_style()),
+                Span::styled("│ ", Style::default().fg(GB_BG2)),
+            ];
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn timing_lines(request: &RequestView) -> Vec<Line<'static>> {
@@ -4197,6 +4343,13 @@ fn labeled_line(label: &'static str, value: String) -> Line<'static> {
         Span::styled(format!("{label:<9}"), label_style()),
         Span::raw(value),
     ])
+}
+
+fn empty_state_lines(title: &'static str, hint: &'static str) -> Vec<Line<'static>> {
+    vec![
+        Line::styled(title, label_style()),
+        Line::styled(hint, muted_style()),
+    ]
 }
 
 fn query_params_for_url(url: &str) -> Vec<(String, String)> {

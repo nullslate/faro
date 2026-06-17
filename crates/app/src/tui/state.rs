@@ -32,6 +32,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) requests: Vec<RequestView>,
     pub(crate) request_tree_metas: Vec<RequestTreeMeta>,
     pub(crate) filtered_request_indices: Vec<usize>,
+    pub(crate) filtered_request_rows: Vec<usize>,
     pub(crate) filtered_route_descendant_counts: HashMap<String, usize>,
     pub(crate) collapsed_request_groups: HashSet<String>,
     pub(crate) active_request_route_group: Option<String>,
@@ -180,6 +181,7 @@ impl WorkbenchState {
             requests,
             request_tree_metas,
             filtered_request_indices,
+            filtered_request_rows: Vec::new(),
             filtered_route_descendant_counts: HashMap::new(),
             collapsed_request_groups: HashSet::new(),
             active_request_route_group: None,
@@ -271,6 +273,7 @@ impl WorkbenchState {
         self.requests = loaded.requests;
         self.request_tree_metas = loaded.request_tree_metas;
         self.filtered_route_descendant_counts = HashMap::new();
+        self.filtered_request_rows = Vec::new();
         self.collapsed_request_groups = collapsed_request_groups;
         self.active_request_route_group = active_request_route_group;
         self.console_logs = loaded.console_logs;
@@ -304,8 +307,8 @@ impl WorkbenchState {
         let selected = selected_id
             .and_then(|id| self.filtered_index_for_request_id(&id))
             .or_else(|| {
-                (!self.filtered_request_indices.is_empty())
-                    .then(|| self.filtered_request_indices.len() - 1)
+                (!self.filtered_request_rows.is_empty())
+                    .then(|| self.filtered_request_rows.len() - 1)
             });
         self.table_state.select(selected);
         self.reset_request_view_scroll();
@@ -499,14 +502,12 @@ impl WorkbenchState {
     }
 
     pub(crate) fn selected_request(&self) -> Option<&RequestView> {
-        self.table_state
-            .selected()
-            .and_then(|index| self.filtered_request_indices.get(index))
-            .and_then(|index| self.requests.get(*index))
+        self.selected_request_index()
+            .and_then(|index| self.requests.get(index))
     }
 
     pub(crate) fn select_request_position(&mut self, position: usize) {
-        if position < self.filtered_request_indices.len() {
+        if position < self.filtered_request_rows.len() {
             self.table_state.select(Some(position));
             self.reset_request_view_scroll();
             self.hydrate_selected_request_for_active_detail();
@@ -534,18 +535,17 @@ impl WorkbenchState {
     }
 
     pub(crate) fn enter_selected_request_group(&mut self) {
-        let Some(request_index) = self
-            .table_state
-            .selected()
-            .and_then(|index| self.filtered_request_indices.get(index))
-            .copied()
-        else {
-            return;
-        };
-        let Some(group) = self.drilldown_group_key_for_request_index(request_index) else {
+        let selected_group = self
+            .selected_request_index()
+            .and_then(|index| self.drilldown_group_key_for_request_index(index));
+        let Some(group) = selected_group else {
             self.status = "no collapsible request branch".to_string();
             return;
         };
+        if self.active_request_route_group.as_deref() == Some(group.as_str()) {
+            self.status = "no collapsible request branch".to_string();
+            return;
+        }
         self.collapsed_request_groups.remove(&group);
         self.active_request_route_group = Some(group.clone());
         self.status = format!(
@@ -569,15 +569,10 @@ impl WorkbenchState {
     }
 
     pub(crate) fn toggle_selected_request_group(&mut self) {
-        let Some(request_index) = self
-            .table_state
-            .selected()
-            .and_then(|index| self.filtered_request_indices.get(index))
-            .copied()
-        else {
-            return;
-        };
-        let Some(group) = self.collapsible_group_key_for_request_index(request_index) else {
+        let selected_group = self
+            .selected_request_index()
+            .and_then(|index| self.collapsible_group_key_for_request_index(index));
+        let Some(group) = selected_group else {
             self.status = "no collapsible request branch".to_string();
             return;
         };
@@ -782,8 +777,8 @@ impl WorkbenchState {
                     .min(u16::MAX as usize) as u16;
             }
             FocusPane::Requests => self.table_state.select(
-                (!self.filtered_request_indices.is_empty())
-                    .then_some(self.filtered_request_indices.len() - 1),
+                (!self.filtered_request_rows.is_empty())
+                    .then_some(self.filtered_request_rows.len() - 1),
             ),
             FocusPane::Console => self.console_state.select(
                 (!self.filtered_console_indices.is_empty())
@@ -936,11 +931,11 @@ impl WorkbenchState {
     }
 
     fn next_request(&mut self) {
-        if self.filtered_request_indices.is_empty() {
+        if self.filtered_request_rows.is_empty() {
             return;
         }
         let next = match self.table_state.selected() {
-            Some(index) if index + 1 < self.filtered_request_indices.len() => index + 1,
+            Some(index) if index + 1 < self.filtered_request_rows.len() => index + 1,
             _ => 0,
         };
         self.table_state.select(Some(next));
@@ -949,11 +944,11 @@ impl WorkbenchState {
     }
 
     fn previous_request(&mut self) {
-        if self.filtered_request_indices.is_empty() {
+        if self.filtered_request_rows.is_empty() {
             return;
         }
         let previous = match self.table_state.selected() {
-            Some(0) | None => self.filtered_request_indices.len() - 1,
+            Some(0) | None => self.filtered_request_rows.len() - 1,
             Some(index) => index - 1,
         };
         self.table_state.select(Some(previous));
@@ -1244,11 +1239,7 @@ impl WorkbenchState {
                 let not_hidden_by_clear = self
                     .requests_hidden_before
                     .is_none_or(|hidden_before| request.request.started_at > hidden_before);
-                (sql_matches
-                    && route_matches
-                    && filter.matches(request)
-                    && !self.request_hidden_by_collapsed_group(index)
-                    && not_hidden_by_clear)
+                (sql_matches && route_matches && filter.matches(request) && not_hidden_by_clear)
                     .then_some(index)
             })
             .collect();
@@ -1263,10 +1254,11 @@ impl WorkbenchState {
             }
         });
         self.rebuild_filtered_route_descendant_counts();
+        self.rebuild_filtered_request_rows();
 
         let selected = selected_id
             .and_then(|id| self.filtered_index_for_request_id(&id))
-            .or_else(|| (!self.filtered_request_indices.is_empty()).then_some(0));
+            .or_else(|| (!self.filtered_request_rows.is_empty()).then_some(0));
         self.table_state.select(selected);
         self.reset_request_view_scroll();
         self.hydrate_selected_request_for_active_detail();
@@ -1287,13 +1279,12 @@ impl WorkbenchState {
         }
     }
 
+    fn rebuild_filtered_request_rows(&mut self) {
+        self.filtered_request_rows = self.filtered_request_indices.clone();
+    }
+
     pub(crate) fn hydrate_selected_request(&mut self) {
-        let Some(request_index) = self
-            .table_state
-            .selected()
-            .and_then(|index| self.filtered_request_indices.get(index))
-            .copied()
-        else {
+        let Some(request_index) = self.selected_request_index() else {
             return;
         };
         let Some(request) = self.requests.get(request_index) else {
@@ -1438,20 +1429,16 @@ impl WorkbenchState {
     }
 
     fn filtered_index_for_request_id(&self, request_id: &str) -> Option<usize> {
-        self.filtered_request_indices
+        self.filtered_request_rows
             .iter()
             .position(|index| self.requests[*index].request.id == request_id)
     }
 
-    fn request_hidden_by_collapsed_group(&self, request_index: usize) -> bool {
-        self.request_tree_metas
-            .get(request_index)
-            .map(|meta| {
-                meta.ancestor_keys
-                    .iter()
-                    .any(|key| self.collapsed_request_groups.contains(key))
-            })
-            .unwrap_or(false)
+    fn selected_request_index(&self) -> Option<usize> {
+        self.table_state
+            .selected()
+            .and_then(|index| self.filtered_request_rows.get(index))
+            .copied()
     }
 
     fn request_in_active_route(&self, request_index: usize) -> bool {
@@ -3769,6 +3756,7 @@ mod tests {
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
         state.rebuild_filtered_route_descendant_counts();
+        state.rebuild_filtered_request_rows();
 
         assert_eq!(
             state.collapsible_group_key_for_request_index(0).as_deref(),
@@ -3800,6 +3788,7 @@ mod tests {
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
         state.rebuild_filtered_route_descendant_counts();
+        state.rebuild_filtered_request_rows();
 
         let Some(parent_meta) = state.request_tree_meta(0) else {
             panic!("missing parent meta");
@@ -3828,6 +3817,7 @@ mod tests {
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
         state.rebuild_filtered_route_descendant_counts();
+        state.rebuild_filtered_request_rows();
 
         let Some(group) = state.collapsible_group_key_for_request_index(0) else {
             panic!("missing collapsible group");
@@ -3860,6 +3850,7 @@ mod tests {
         state.request_tree_metas = metas;
         state.filtered_request_indices = vec![0, 1];
         state.rebuild_filtered_route_descendant_counts();
+        state.rebuild_filtered_request_rows();
 
         assert!(state.request_can_drill_down(0));
         assert!(state.request_can_drill_down(1));

@@ -389,7 +389,7 @@ fn select_request_from_mouse(app: &mut WorkbenchState, mouse: MouseEvent, area: 
         return;
     }
     let selected = app.table_state.selected().unwrap_or(0);
-    let start = selected_window_start(selected, visible_rows, app.filtered_request_indices.len());
+    let start = selected_window_start(selected, visible_rows, app.filtered_request_rows.len());
     app.select_request_position(start + row);
 }
 
