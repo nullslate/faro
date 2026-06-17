@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
+use faro_core::config_dir;
 use ratatui::style::Color;
 use serde::Deserialize;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -352,20 +352,7 @@ fn config_path() -> Option<PathBuf> {
 }
 
 fn config_path_for(app_dir: &str) -> Option<PathBuf> {
-    if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
-        && !config_home.is_empty()
-    {
-        return Some(PathBuf::from(config_home).join(app_dir).join("config.toml"));
-    }
-    match env::var("HOME") {
-        Ok(home) if !home.is_empty() => Some(
-            PathBuf::from(home)
-                .join(".config")
-                .join(app_dir)
-                .join("config.toml"),
-        ),
-        _ => None,
-    }
+    config_dir(app_dir).map(|path| path.join("config.toml"))
 }
 
 impl RawConfig {

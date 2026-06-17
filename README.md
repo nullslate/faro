@@ -23,7 +23,7 @@ Faro does not embed Chromium and does not render web pages in the terminal. It c
 - Replay captured requests with `curl` and persist replay status/body metadata.
 - Read-only SQL editor in the TUI, plus CLI/MCP read-only SQL for agents.
 - Agent-friendly CLI and MCP server for capture, inspection, replay, and SQL.
-- TOML config in `~/.config/faro/config.toml` or `$XDG_CONFIG_HOME/faro/config.toml`.
+- TOML config in the platform config directory, with relative DB paths resolved there.
 
 ## Quick Start
 
@@ -286,22 +286,20 @@ It contains:
 
 ## Configuration
 
-On first run, Faro creates:
+On first run, Faro creates `config.toml` in the platform config directory:
 
 ```text
-$XDG_CONFIG_HOME/faro/config.toml
+Linux:   $XDG_CONFIG_HOME/faro/config.toml or ~/.config/faro/config.toml
+macOS:   ~/Library/Application Support/faro/config.toml
+Windows: %APPDATA%\faro\config.toml
 ```
 
-or:
+The default database path is `faro.db` relative to the config directory. Faro also stores layout preferences, the last SQL query, and the persistent Chromium profile there.
 
 ```text
-~/.config/faro/config.toml
-```
-
-The default database path is `faro.db` relative to the config directory, so the default DB is usually:
-
-```text
-~/.config/faro/faro.db
+Linux:   ~/.config/faro/faro.db
+macOS:   ~/Library/Application Support/faro/faro.db
+Windows: %APPDATA%\faro\faro.db
 ```
 
 Important config fields:

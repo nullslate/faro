@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::env;
+use std::path::PathBuf;
 use std::string::FromUtf8Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -16,6 +18,50 @@ pub fn now_ms() -> UnixMillis {
         Ok(elapsed) => elapsed.as_millis() as UnixMillis,
         Err(_) => 0,
     }
+}
+
+pub fn config_dir(app_dir: &str) -> Option<PathBuf> {
+    if let Some(config_home) = env_var_nonempty("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(config_home).join(app_dir));
+    }
+
+    platform_config_dir(app_dir)
+}
+
+fn env_var_nonempty(name: &str) -> Option<String> {
+    match env::var(name) {
+        Ok(value) if !value.is_empty() => Some(value),
+        Ok(_) | Err(_) => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_config_dir(app_dir: &str) -> Option<PathBuf> {
+    env_var_nonempty("APPDATA")
+        .or_else(|| env_var_nonempty("LOCALAPPDATA"))
+        .map(PathBuf::from)
+        .map(|path| path.join(app_dir))
+        .or_else(|| {
+            env_var_nonempty("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|path| path.join("AppData").join("Roaming").join(app_dir))
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn platform_config_dir(app_dir: &str) -> Option<PathBuf> {
+    env_var_nonempty("HOME").map(PathBuf::from).map(|path| {
+        path.join("Library")
+            .join("Application Support")
+            .join(app_dir)
+    })
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn platform_config_dir(app_dir: &str) -> Option<PathBuf> {
+    env_var_nonempty("HOME")
+        .map(PathBuf::from)
+        .map(|path| path.join(".config").join(app_dir))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

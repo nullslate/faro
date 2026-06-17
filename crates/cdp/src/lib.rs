@@ -6,7 +6,7 @@ use faro_capture::{
 use faro_core::{
     ConsoleLevel, CookieEventRecord, CookieRecord, CookieSnapshotRecord, Header, RequestStatus,
     Run, RunTrigger, Session, StorageEntry, StorageSnapshotRecord, Tab, WebSocketFrameDirection,
-    WebSocketFrameRecord, cookie_event_observed_event, cookie_observed_event,
+    WebSocketFrameRecord, config_dir, cookie_event_observed_event, cookie_observed_event,
     storage_snapshot_created_event, websocket_frame_event,
 };
 use faro_store::{Store, inline_text_body};
@@ -1451,17 +1451,9 @@ fn find_on_path(binary: &str) -> Option<PathBuf> {
 }
 
 fn default_profile_dir() -> PathBuf {
-    if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
-        && !config_home.is_empty()
-    {
-        return PathBuf::from(config_home).join("faro/browser-profile");
-    }
-    if let Ok(home) = env::var("HOME")
-        && !home.is_empty()
-    {
-        return PathBuf::from(home).join(".config/faro/browser-profile");
-    }
-    env::temp_dir().join("faro-browser-profile")
+    config_dir("faro")
+        .map(|path| path.join("browser-profile"))
+        .unwrap_or_else(|| env::temp_dir().join("faro-browser-profile"))
 }
 
 fn wait_for_devtools_http(port: u16) -> Result<()> {

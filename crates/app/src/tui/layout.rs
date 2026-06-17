@@ -1,5 +1,5 @@
 use super::state::FocusPane;
-use std::env;
+use faro_core::config_dir;
 use std::fs;
 use std::path::PathBuf;
 
@@ -125,7 +125,7 @@ impl LayoutPreference {
 
     pub(crate) fn save(self) -> anyhow::Result<PathBuf> {
         let path = preference_path()
-            .ok_or_else(|| anyhow::anyhow!("XDG_CONFIG_HOME and HOME are unavailable"))?;
+            .ok_or_else(|| anyhow::anyhow!("Faro config directory is unavailable"))?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -158,14 +158,5 @@ fn parse_percent(value: &str, default: u16) -> u16 {
 }
 
 fn preference_path() -> Option<PathBuf> {
-    if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
-        && !config_home.is_empty()
-    {
-        return Some(PathBuf::from(config_home).join("faro/layout.conf"));
-    }
-
-    match env::var("HOME") {
-        Ok(home) if !home.is_empty() => Some(PathBuf::from(home).join(".config/faro/layout.conf")),
-        _ => None,
-    }
+    config_dir("faro").map(|path| path.join("layout.conf"))
 }

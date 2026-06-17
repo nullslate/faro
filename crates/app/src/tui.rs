@@ -16,8 +16,8 @@ use crossterm::terminal::{
 };
 use faro_cdp::{CaptureOptions, CaptureUpdate};
 use faro_core::{
-    ConsoleLevel, ConsoleLog, CookieEventRecord, ReplayRecord, StorageEventRecord, console_event,
-    cookie_event_observed_event, request_replayed_event, storage_changed_event,
+    ConsoleLevel, ConsoleLog, CookieEventRecord, ReplayRecord, StorageEventRecord, config_dir,
+    console_event, cookie_event_observed_event, request_replayed_event, storage_changed_event,
 };
 use faro_store::{ScriptRecord, Store, inline_text_body};
 use input::{InputOutcome, handle_key};
@@ -1724,8 +1724,8 @@ fn load_last_sql_query() -> anyhow::Result<String> {
 }
 
 fn save_last_sql_query(query: &str) -> anyhow::Result<()> {
-    let path = sql_query_path()
-        .ok_or_else(|| anyhow::anyhow!("XDG_CONFIG_HOME and HOME are unavailable"))?;
+    let path =
+        sql_query_path().ok_or_else(|| anyhow::anyhow!("Faro config directory is unavailable"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
@@ -1734,16 +1734,7 @@ fn save_last_sql_query(query: &str) -> anyhow::Result<()> {
 }
 
 fn sql_query_path() -> Option<PathBuf> {
-    if let Ok(config_home) = env::var("XDG_CONFIG_HOME")
-        && !config_home.is_empty()
-    {
-        return Some(PathBuf::from(config_home).join("faro/last.sql"));
-    }
-
-    match env::var("HOME") {
-        Ok(home) if !home.is_empty() => Some(PathBuf::from(home).join(".config/faro/last.sql")),
-        _ => None,
-    }
+    config_dir("faro").map(|path| path.join("last.sql"))
 }
 
 fn json_escape(value: &str) -> String {
