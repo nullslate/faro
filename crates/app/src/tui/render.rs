@@ -284,21 +284,13 @@ fn console_error_count(app: &WorkbenchState) -> usize {
 fn compact_header_spans(app: &WorkbenchState) -> Vec<Span<'static>> {
     vec![
         Span::styled(site_domain(app), Style::default().fg(GB_FG)),
-        Span::styled(
-            format!(
-                " · {} req · {} err · {}",
-                app.requests.len(),
-                console_error_count(app),
-                transient_status(app)
-            ),
-            muted_style(),
-        ),
+        Span::styled(format!(" · {}", transient_status(app)), muted_style()),
     ]
 }
 
 fn full_header_spans(app: &WorkbenchState) -> Vec<Span<'static>> {
     vec![
-        Span::styled(site_label(app), Style::default().fg(GB_FG)),
+        Span::styled(site_domain(app), Style::default().fg(GB_FG)),
         Span::raw("  "),
         Span::styled(transient_status(app), Style::default().fg(GB_BLUE)),
     ]
@@ -316,14 +308,6 @@ fn transient_status(app: &WorkbenchState) -> String {
     } else {
         compact_value(&app.status, 80)
     }
-}
-
-fn site_label(app: &WorkbenchState) -> String {
-    format!(
-        "{}  {}",
-        site_domain(app),
-        compact_value(&app.target_url, 72)
-    )
 }
 
 fn site_domain(app: &WorkbenchState) -> String {
@@ -989,35 +973,23 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         Span::raw("  "),
         Span::styled("focus ", label_style()),
         Span::raw(app.focus.label()),
-        Span::raw("  "),
-        Span::styled("detail ", label_style()),
-        Span::raw(app.detail_tab.label()),
-        Span::raw("  "),
-        Span::styled("sort ", label_style()),
-        Span::raw(format!(
-            "{}{}",
-            app.sort_mode.label(),
-            if app.sort_descending { " desc" } else { " asc" }
-        )),
     ];
-    if let Some(request) = app.selected_request() {
+
+    if app.view == WorkbenchView::Network {
         status_spans.extend([
             Span::raw("  "),
-            Span::styled("selected ", label_style()),
-            Span::styled(
-                request
-                    .status_code()
-                    .map(|status| status.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                status_style(request.status_code(), RowFade::Full, &app.config.theme),
-            ),
+            Span::styled("tab ", label_style()),
+            Span::raw(app.detail_tab.label()),
+            Span::raw("  "),
+            Span::styled("sort ", label_style()),
             Span::raw(format!(
-                " {} {}",
-                request.request.method,
-                compact_value(&path_for_url(&request.request.url), 56)
+                "{}{}",
+                app.sort_mode.label(),
+                if app.sort_descending { " desc" } else { " asc" }
             )),
         ]);
     }
+
     if app.input_mode != InputMode::Normal {
         status_spans.extend([
             Span::raw("  "),
@@ -1032,66 +1004,34 @@ fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
             Span::raw(app.layout_mode.label()),
         ]);
     }
+
     status_spans.extend([
         Span::raw("  "),
-        Span::styled("density ", label_style()),
-        Span::raw(app.density_mode.label()),
+        Span::styled("status ", label_style()),
+        Span::raw(transient_status(app)),
     ]);
-    if let Some(ids) = &app.sql_request_filter_ids {
+
+    let active_filters = active_filter_count(app);
+    if active_filters > 0 {
         status_spans.extend([
             Span::raw("  "),
-            Span::styled("sql ", label_style()),
-            Span::raw(format!("{} ids", ids.len())),
+            Span::styled("filters ", label_style()),
+            Span::raw(active_filters.to_string()),
         ]);
     }
-    if let Some(query) = &app.sql_request_filter_query {
-        status_spans.extend([
-            Span::raw("  "),
-            Span::styled("sql_query ", label_style()),
-            Span::raw(compact_value(&query.replace('\n', " "), 64)),
-        ]);
-    }
-    if let Some(route) = app.active_request_route_breadcrumb() {
-        status_spans.extend([
-            Span::raw("  "),
-            Span::styled("route ", label_style()),
-            Span::raw(compact_value(&route, 72)),
-        ]);
-    }
-    match app.view {
-        WorkbenchView::Console => {
-            if !app.console_filter.is_empty() {
-                status_spans.extend([
-                    Span::raw("  "),
-                    Span::styled("filter ", label_style()),
-                    Span::raw(app.console_filter.clone()),
-                ]);
-            }
-        }
-        _ => {
-            if !app.request_filter.is_empty() {
-                status_spans.extend([
-                    Span::raw("  "),
-                    Span::styled("filter ", label_style()),
-                    Span::raw(app.request_filter.clone()),
-                ]);
-            }
-            if let Some(label) = app.active_filter_preset_label()
-                && !app.request_filter.is_empty()
-            {
-                status_spans.extend([
-                    Span::raw("  "),
-                    Span::styled("preset ", label_style()),
-                    Span::raw(label),
-                ]);
-            }
-        }
-    }
+
     let status = Line::from(status_spans);
     frame.render_widget(
         Paragraph::new(vec![keys, status]).style(Style::default().fg(GB_FG)),
         area,
     );
+}
+
+fn active_filter_count(app: &WorkbenchState) -> usize {
+    usize::from(!app.request_filter.is_empty())
+        + usize::from(!app.console_filter.is_empty())
+        + usize::from(app.sql_request_filter_ids.is_some())
+        + usize::from(app.active_request_route_breadcrumb().is_some())
 }
 
 fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
@@ -1526,26 +1466,16 @@ fn compact_help_line() -> Line<'static> {
         Span::raw(" palette  "),
         Span::styled("q", key_style()),
         Span::raw(" quit  "),
-        Span::styled("o", key_style()),
-        Span::raw(" open  "),
         Span::styled("/", key_style()),
         Span::raw(" filter  "),
-        Span::styled("f", key_style()),
-        Span::raw(" preset  "),
-        Span::styled("z", key_style()),
-        Span::raw(" density  "),
         Span::styled("1-4", key_style()),
         Span::raw(" views  "),
-        Span::styled("R/D/B", key_style()),
-        Span::raw(" panes  "),
         Span::styled("enter", key_style()),
         Span::raw(" route  "),
         Span::styled("backspace", key_style()),
         Span::raw(" up  "),
         Span::styled("j/k", key_style()),
         Span::raw(" move  "),
-        Span::styled("F5", key_style()),
-        Span::raw(" refresh  "),
         Span::styled("?", key_style()),
         Span::raw(" keys"),
     ])
