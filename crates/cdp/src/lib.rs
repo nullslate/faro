@@ -5,8 +5,9 @@ use devbench_capture::{
 };
 use devbench_core::{
     ConsoleLevel, CookieEventRecord, CookieRecord, CookieSnapshotRecord, Header, RequestStatus,
-    Run, RunTrigger, Session, StorageEntry, StorageSnapshotRecord, Tab,
-    cookie_event_observed_event, cookie_observed_event, storage_snapshot_created_event,
+    Run, RunTrigger, Session, StorageEntry, StorageSnapshotRecord, Tab, WebSocketFrameDirection,
+    WebSocketFrameRecord, cookie_event_observed_event, cookie_observed_event,
+    storage_snapshot_created_event, websocket_frame_event,
 };
 use devbench_store::{Store, inline_text_body};
 use futures_util::{SinkExt, StreamExt};
@@ -571,6 +572,13 @@ pub async fn capture_url(
                     let _ = updates.send(CaptureUpdate::StoreChanged);
                 }
             }
+            "Network.webSocketFrameSent" | "Network.webSocketFrameReceived" => {
+                if let Some(frame) = parse_websocket_frame(&session, &tab, &run, method, &params) {
+                    store.insert_websocket_frame(&frame)?;
+                    store.append_event(&websocket_frame_event(&frame))?;
+                    let _ = updates.send(CaptureUpdate::StoreChanged);
+                }
+            }
             "Network.loadingFinished" => {
                 if let Some(request_id) = params.get("requestId").and_then(Value::as_str) {
                     let command_id = next_id;
@@ -786,6 +794,39 @@ fn parse_response_received(
         body_size: None,
         body_truncated: false,
     })
+}
+
+fn parse_websocket_frame(
+    session: &Session,
+    tab: &Tab,
+    run: &Run,
+    method: &str,
+    params: &Value,
+) -> Option<WebSocketFrameRecord> {
+    let request_id = params.get("requestId")?.as_str()?.to_string();
+    let response = params.get("response")?;
+    let direction = if method == "Network.webSocketFrameSent" {
+        WebSocketFrameDirection::Sent
+    } else {
+        WebSocketFrameDirection::Received
+    };
+    Some(WebSocketFrameRecord::new(
+        session.id.clone(),
+        Some(tab.id.clone()),
+        Some(run.id.clone()),
+        request_id,
+        direction,
+        response.get("opcode").and_then(Value::as_i64).unwrap_or(1),
+        response
+            .get("mask")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        response
+            .get("payloadData")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    ))
 }
 
 fn parse_console_api_called(

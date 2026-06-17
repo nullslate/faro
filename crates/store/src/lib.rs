@@ -1,7 +1,7 @@
 use devbench_core::{
     BodyRecord, ConsoleLevel, ConsoleLog, CookieEventRecord, CookieSnapshotRecord, EventEnvelope,
     Header, Id, ReplayRecord, RequestRecord, RequestStatus, ResponseRecord, Run, Session,
-    StorageEventRecord, StorageSnapshotRecord, Tab,
+    StorageEventRecord, StorageSnapshotRecord, Tab, WebSocketFrameDirection, WebSocketFrameRecord,
 };
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension, params,
@@ -543,6 +543,27 @@ impl Store {
         Ok(())
     }
 
+    pub fn insert_websocket_frame(&self, frame: &WebSocketFrameRecord) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO websocket_frames
+             (id, session_id, tab_id, run_id, browser_request_id, ts, direction, opcode, mask, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                frame.id,
+                frame.session_id,
+                frame.tab_id,
+                frame.run_id,
+                frame.browser_request_id,
+                frame.ts,
+                frame.direction.as_str(),
+                frame.opcode,
+                if frame.mask { 1 } else { 0 },
+                frame.payload
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn requests_for_session(&self, session_id: &str) -> Result<Vec<RequestRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, tab_id, run_id, browser_request_id, started_at, completed_at,
@@ -731,6 +752,38 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(logs)
+    }
+
+    pub fn websocket_frames_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<WebSocketFrameRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, session_id, tab_id, run_id, browser_request_id, ts, direction, opcode, mask, payload
+             FROM websocket_frames
+             WHERE session_id = ?1
+             ORDER BY ts ASC, id ASC",
+        )?;
+
+        let frames = stmt
+            .query_map(params![session_id], |row| {
+                let direction: String = row.get(6)?;
+                Ok(WebSocketFrameRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    tab_id: row.get(2)?,
+                    run_id: row.get(3)?,
+                    browser_request_id: row.get(4)?,
+                    ts: row.get(5)?,
+                    direction: parse_websocket_direction(&direction),
+                    opcode: row.get(7)?,
+                    mask: row.get(8)?,
+                    payload: row.get(9)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(frames)
     }
 
     pub fn storage_events_for_session(&self, session_id: &str) -> Result<Vec<StorageEventRecord>> {
@@ -1053,6 +1106,13 @@ fn parse_run_trigger(trigger: &str) -> devbench_core::RunTrigger {
     }
 }
 
+fn parse_websocket_direction(direction: &str) -> WebSocketFrameDirection {
+    match direction {
+        "sent" => WebSocketFrameDirection::Sent,
+        _ => WebSocketFrameDirection::Received,
+    }
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
@@ -1219,6 +1279,22 @@ CREATE TABLE IF NOT EXISTS cookie_events (
     value TEXT,
     attributes_json TEXT
 );
+
+CREATE TABLE IF NOT EXISTS websocket_frames (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    tab_id TEXT REFERENCES tabs(id) ON DELETE SET NULL,
+    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+    browser_request_id TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    opcode INTEGER NOT NULL,
+    mask INTEGER NOT NULL,
+    payload TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_websocket_frames_session_ts ON websocket_frames(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_websocket_frames_request_ts ON websocket_frames(browser_request_id, ts);
 "#;
 
 #[cfg(test)]
@@ -1226,9 +1302,10 @@ mod tests {
     use super::*;
     use devbench_core::{
         CookieEventRecord, CookieRecord, CookieSnapshotRecord, ReplayRecord, RunTrigger,
-        StorageEntry, StorageSnapshotRecord, console_event, cookie_event_observed_event,
-        cookie_observed_event, request_completed_event, request_replayed_event,
-        request_started_event, response_received_event, storage_snapshot_created_event,
+        StorageEntry, StorageSnapshotRecord, WebSocketFrameDirection, WebSocketFrameRecord,
+        console_event, cookie_event_observed_event, cookie_observed_event, request_completed_event,
+        request_replayed_event, request_started_event, response_received_event,
+        storage_snapshot_created_event, websocket_frame_event,
     };
 
     type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -1345,6 +1422,42 @@ mod tests {
         assert_eq!(replays.len(), 1);
         assert_eq!(replays[0].status_code, Some(200));
         assert_eq!(store.replays_for_session(&session.id)?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn persists_websocket_frames() -> TestResult {
+        let store = Store::open_memory()?;
+        let session = Session::new(None, Some("http://localhost:3000".to_string()));
+        let tab = Tab::new(session.id.clone(), session.root_url.clone());
+        let run = Run::new(
+            session.id.clone(),
+            tab.id.clone(),
+            "http://localhost:3000".to_string(),
+            RunTrigger::InitialLoad,
+        );
+        store.insert_session(&session)?;
+        store.insert_tab(&tab)?;
+        store.insert_run(&run)?;
+
+        let frame = WebSocketFrameRecord::new(
+            session.id.clone(),
+            Some(tab.id.clone()),
+            Some(run.id.clone()),
+            "ws-1".to_string(),
+            WebSocketFrameDirection::Received,
+            1,
+            false,
+            "{\"type\":\"hello\"}".to_string(),
+        );
+        store.insert_websocket_frame(&frame)?;
+        store.append_event(&websocket_frame_event(&frame))?;
+
+        let frames = store.websocket_frames_for_session(&session.id)?;
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].browser_request_id, "ws-1");
+        assert_eq!(frames[0].direction, WebSocketFrameDirection::Received);
+        assert_eq!(frames[0].payload, "{\"type\":\"hello\"}");
         Ok(())
     }
 

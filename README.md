@@ -13,6 +13,7 @@ Devbench does not embed Chromium and does not render web pages in the terminal. 
 ## Features
 
 - Network request tree with route drilldown, filters, presets, response details, and replay history.
+- WebSocket frame stream view with sent/received traffic, payload inspection, and filtering.
 - Captured request/response headers, query params, request bodies, bounded text response bodies, SSE parsing, and small image previews where the terminal supports inline images.
 - Console logs, page errors, and JavaScript scratch evaluation through `$EDITOR`.
 - Storage and cookies views with captured snapshots and live mutation events.
@@ -97,7 +98,7 @@ Common keys:
 ```text
 q/esc   quit
 tab     switch focus
-1-4     switch views: Network, Console, Storage, Cookies
+1-5     switch views: Network, Console, WebSockets, Storage, Cookies
 j/k     move focused selection
 enter   drill into a route / expand selected tree item
 backspace go up one route level

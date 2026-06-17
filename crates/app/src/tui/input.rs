@@ -121,10 +121,14 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             InputOutcome::Continue
         }
         KeyCode::Char('3') => {
-            app.set_view(WorkbenchView::Storage);
+            app.set_view(WorkbenchView::WebSockets);
             InputOutcome::Continue
         }
         KeyCode::Char('4') => {
+            app.set_view(WorkbenchView::Storage);
+            InputOutcome::Continue
+        }
+        KeyCode::Char('5') => {
             app.set_view(WorkbenchView::Cookies);
             InputOutcome::Continue
         }

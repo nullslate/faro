@@ -2,7 +2,8 @@ use crate::config::AppConfig;
 use anyhow::Context;
 use devbench_core::{
     ConsoleLevel, ConsoleLog, CookieEventRecord, CookieSnapshotRecord, ReplayRecord, RequestRecord,
-    ResponseRecord, Session, StorageEventRecord, StorageSnapshotRecord, UnixMillis, now_ms,
+    ResponseRecord, Session, StorageEventRecord, StorageSnapshotRecord, UnixMillis,
+    WebSocketFrameRecord, now_ms,
 };
 use devbench_store::Store;
 use ratatui::widgets::{ListState, TableState};
@@ -30,6 +31,10 @@ pub(crate) struct WorkbenchState {
     pub(crate) console_logs: Vec<ConsoleLog>,
     pub(crate) filtered_console_indices: Vec<usize>,
     pub(crate) console_hidden_before: Option<UnixMillis>,
+    pub(crate) websocket_frames: Vec<WebSocketFrameRecord>,
+    pub(crate) filtered_websocket_indices: Vec<usize>,
+    pub(crate) websocket_state: ListState,
+    pub(crate) websocket_detail_scroll: u16,
     pub(crate) storage_events: Vec<StorageEventRecord>,
     pub(crate) storage_snapshots: Vec<StorageSnapshotRecord>,
     pub(crate) storage_selected: usize,
@@ -88,6 +93,7 @@ impl WorkbenchState {
     ) -> anyhow::Result<Self> {
         let mut requests = Vec::new();
         let mut console_logs = Vec::new();
+        let mut websocket_frames = Vec::new();
         let mut storage_events = Vec::new();
         let mut storage_snapshots = Vec::new();
         let mut cookie_events = Vec::new();
@@ -100,6 +106,7 @@ impl WorkbenchState {
                 responses_by_request.insert(response.request_id.clone(), response);
             }
             console_logs.extend(store.console_logs_for_session(&session.id)?);
+            websocket_frames.extend(store.websocket_frames_for_session(&session.id)?);
             storage_events.extend(store.storage_events_for_session(&session.id)?);
             storage_snapshots.extend(store.storage_snapshots_for_session(&session.id)?);
             cookie_events.extend(store.cookie_events_for_session(&session.id)?);
@@ -127,6 +134,11 @@ impl WorkbenchState {
         let mut console_state = ListState::default();
         if !filtered_console_indices.is_empty() {
             console_state.select(Some(filtered_console_indices.len() - 1));
+        }
+        let filtered_websocket_indices = (0..websocket_frames.len()).collect::<Vec<_>>();
+        let mut websocket_state = ListState::default();
+        if !filtered_websocket_indices.is_empty() {
+            websocket_state.select(Some(filtered_websocket_indices.len() - 1));
         }
 
         let layout_preference = LayoutPreference::load();
@@ -156,6 +168,10 @@ impl WorkbenchState {
             console_logs,
             filtered_console_indices,
             console_hidden_before: None,
+            websocket_frames,
+            filtered_websocket_indices,
+            websocket_state,
+            websocket_detail_scroll: 0,
             storage_events,
             storage_snapshots,
             storage_selected: 0,
@@ -225,6 +241,12 @@ impl WorkbenchState {
         self.collapsed_request_groups = collapsed_request_groups;
         self.active_request_route_group = active_request_route_group;
         self.console_logs = loaded.console_logs;
+        self.websocket_frames = loaded.websocket_frames;
+        self.apply_websocket_filter();
+        if !self.filtered_websocket_indices.is_empty() {
+            self.websocket_state
+                .select(Some(self.filtered_websocket_indices.len() - 1));
+        }
         if let Some(hidden_before) = self.console_hidden_before {
             self.console_logs.retain(|log| log.ts > hidden_before);
         }
@@ -518,6 +540,7 @@ impl WorkbenchState {
         self.focus = match view {
             WorkbenchView::Network => FocusPane::Requests,
             WorkbenchView::Console => FocusPane::Console,
+            WorkbenchView::WebSockets => FocusPane::WebSockets,
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
@@ -530,6 +553,7 @@ impl WorkbenchState {
                 _ => FocusPane::Requests,
             },
             WorkbenchView::Console => FocusPane::Console,
+            WorkbenchView::WebSockets => FocusPane::WebSockets,
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
@@ -542,6 +566,7 @@ impl WorkbenchState {
             FocusPane::Body if self.has_body_tree() => self.next_body_tree_node(),
             FocusPane::Body => self.scroll_down(),
             FocusPane::Console => self.next_console(),
+            FocusPane::WebSockets => self.next_websocket_frame(),
             FocusPane::Storage => self.next_storage_entry(),
             FocusPane::Cookies => self.next_cookie_entry(),
         }
@@ -554,6 +579,7 @@ impl WorkbenchState {
             FocusPane::Body if self.has_body_tree() => self.previous_body_tree_node(),
             FocusPane::Body => self.scroll_up(),
             FocusPane::Console => self.previous_console(),
+            FocusPane::WebSockets => self.previous_websocket_frame(),
             FocusPane::Storage => self.previous_storage_entry(),
             FocusPane::Cookies => self.previous_cookie_entry(),
         }
@@ -567,6 +593,7 @@ impl WorkbenchState {
                 _ => FocusPane::Requests,
             },
             WorkbenchView::Console => FocusPane::Console,
+            WorkbenchView::WebSockets => FocusPane::WebSockets,
             WorkbenchView::Storage => FocusPane::Storage,
             WorkbenchView::Cookies => FocusPane::Cookies,
         };
@@ -588,6 +615,9 @@ impl WorkbenchState {
             FocusPane::Body => self.body_scroll = self.body_scroll.saturating_add(8),
             FocusPane::Requests => self.next_request(),
             FocusPane::Console => self.next_console(),
+            FocusPane::WebSockets => {
+                self.websocket_detail_scroll = self.websocket_detail_scroll.saturating_add(8)
+            }
             FocusPane::Storage => {
                 for _ in 0..4 {
                     self.next_storage_entry();
@@ -607,6 +637,9 @@ impl WorkbenchState {
             FocusPane::Body => self.body_scroll = self.body_scroll.saturating_sub(8),
             FocusPane::Requests => self.previous_request(),
             FocusPane::Console => self.previous_console(),
+            FocusPane::WebSockets => {
+                self.websocket_detail_scroll = self.websocket_detail_scroll.saturating_sub(8)
+            }
             FocusPane::Storage => {
                 for _ in 0..4 {
                     self.previous_storage_entry();
@@ -642,6 +675,11 @@ impl WorkbenchState {
             FocusPane::Console => self
                 .console_state
                 .select((!self.filtered_console_indices.is_empty()).then_some(0)),
+            FocusPane::WebSockets => {
+                self.websocket_detail_scroll = 0;
+                self.websocket_state
+                    .select((!self.filtered_websocket_indices.is_empty()).then_some(0));
+            }
         }
     }
 
@@ -678,6 +716,13 @@ impl WorkbenchState {
                 (!self.filtered_console_indices.is_empty())
                     .then_some(self.filtered_console_indices.len() - 1),
             ),
+            FocusPane::WebSockets => {
+                self.websocket_detail_scroll = u16::MAX;
+                self.websocket_state.select(
+                    (!self.filtered_websocket_indices.is_empty())
+                        .then_some(self.filtered_websocket_indices.len() - 1),
+                );
+            }
         }
     }
 
@@ -686,6 +731,10 @@ impl WorkbenchState {
             WorkbenchView::Console => {
                 self.console_filter.push(character);
                 self.apply_console_filter();
+            }
+            WorkbenchView::WebSockets => {
+                self.request_filter.push(character);
+                self.apply_websocket_filter();
             }
             _ => {
                 self.request_filter.push(character);
@@ -700,6 +749,10 @@ impl WorkbenchState {
                 self.console_filter.pop();
                 self.apply_console_filter();
             }
+            WorkbenchView::WebSockets => {
+                self.request_filter.pop();
+                self.apply_websocket_filter();
+            }
             _ => {
                 self.request_filter.pop();
                 self.apply_filter();
@@ -712,6 +765,10 @@ impl WorkbenchState {
             WorkbenchView::Console => {
                 self.console_filter.clear();
                 self.apply_console_filter();
+            }
+            WorkbenchView::WebSockets => {
+                self.request_filter.clear();
+                self.apply_websocket_filter();
             }
             _ => {
                 self.request_filter.clear();
@@ -809,6 +866,30 @@ impl WorkbenchState {
             Some(index) => index - 1,
         };
         self.console_state.select(Some(previous));
+    }
+
+    fn next_websocket_frame(&mut self) {
+        if self.filtered_websocket_indices.is_empty() {
+            return;
+        }
+        let next = match self.websocket_state.selected() {
+            Some(index) if index + 1 < self.filtered_websocket_indices.len() => index + 1,
+            _ => 0,
+        };
+        self.websocket_state.select(Some(next));
+        self.websocket_detail_scroll = 0;
+    }
+
+    fn previous_websocket_frame(&mut self) {
+        if self.filtered_websocket_indices.is_empty() {
+            return;
+        }
+        let previous = match self.websocket_state.selected() {
+            Some(0) | None => self.filtered_websocket_indices.len() - 1,
+            Some(index) => index - 1,
+        };
+        self.websocket_state.select(Some(previous));
+        self.websocket_detail_scroll = 0;
     }
 
     fn next_storage_entry(&mut self) {
@@ -1108,6 +1189,28 @@ impl WorkbenchState {
         self.console_state.select(selected);
     }
 
+    fn apply_websocket_filter(&mut self) {
+        let selected_id = self
+            .selected_websocket_frame()
+            .map(|frame| frame.id.clone());
+        let filter = self.request_filter.trim().to_lowercase();
+        self.filtered_websocket_indices = self
+            .websocket_frames
+            .iter()
+            .enumerate()
+            .filter_map(|(index, frame)| websocket_frame_matches(frame, &filter).then_some(index))
+            .collect();
+
+        let selected = selected_id
+            .and_then(|id| {
+                self.filtered_websocket_indices.iter().position(|index| {
+                    self.websocket_frames.get(*index).map(|frame| &frame.id) == Some(&id)
+                })
+            })
+            .or_else(|| (!self.filtered_websocket_indices.is_empty()).then_some(0));
+        self.websocket_state.select(selected);
+    }
+
     fn filtered_index_for_request_id(&self, request_id: &str) -> Option<usize> {
         self.filtered_request_indices
             .iter()
@@ -1226,6 +1329,13 @@ impl WorkbenchState {
             .selected()
             .and_then(|index| self.filtered_console_indices.get(index))
             .and_then(|index| self.console_logs.get(*index))
+    }
+
+    pub(crate) fn selected_websocket_frame(&self) -> Option<&WebSocketFrameRecord> {
+        self.websocket_state
+            .selected()
+            .and_then(|index| self.filtered_websocket_indices.get(index))
+            .and_then(|index| self.websocket_frames.get(*index))
     }
 
     fn reset_request_view_scroll(&mut self) {
@@ -1476,6 +1586,30 @@ fn body_text_for_ref(store: &Store, body_id: Option<&str>) -> anyhow::Result<Opt
         .with_context(|| format!("decode body {body_id} as utf-8"))
 }
 
+fn websocket_frame_matches(frame: &WebSocketFrameRecord, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let direction = frame.direction.as_str();
+    let opcode = websocket_opcode_label(frame.opcode);
+    direction.contains(filter)
+        || opcode.contains(filter)
+        || frame.browser_request_id.to_lowercase().contains(filter)
+        || frame.payload.to_lowercase().contains(filter)
+}
+
+pub(crate) fn websocket_opcode_label(opcode: i64) -> &'static str {
+    match opcode {
+        0 => "continuation",
+        1 => "text",
+        2 => "binary",
+        8 => "close",
+        9 => "ping",
+        10 => "pong",
+        _ => "other",
+    }
+}
+
 fn select_session(
     sessions: Vec<Session>,
     target_url: &str,
@@ -1510,6 +1644,7 @@ pub(crate) enum FocusPane {
     Detail,
     Body,
     Console,
+    WebSockets,
     Storage,
     Cookies,
 }
@@ -1518,6 +1653,7 @@ pub(crate) enum FocusPane {
 pub(crate) enum WorkbenchView {
     Network,
     Console,
+    WebSockets,
     Storage,
     Cookies,
 }
@@ -1527,6 +1663,7 @@ impl WorkbenchView {
         match self {
             Self::Network => "network",
             Self::Console => "console",
+            Self::WebSockets => "websockets",
             Self::Storage => "storage",
             Self::Cookies => "cookies",
         }
@@ -1540,6 +1677,7 @@ impl FocusPane {
             Self::Detail => "detail",
             Self::Body => "body",
             Self::Console => "console",
+            Self::WebSockets => "websockets",
             Self::Storage => "storage",
             Self::Cookies => "cookies",
         }
@@ -1550,6 +1688,7 @@ impl FocusPane {
             "detail" => Self::Detail,
             "body" => Self::Body,
             "console" => Self::Console,
+            "websockets" => Self::WebSockets,
             "storage" => Self::Storage,
             "cookies" => Self::Cookies,
             _ => Self::Requests,
@@ -1713,6 +1852,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "View: Console",
         hint: "logs javascript errors",
         command: PaletteCommand::View(WorkbenchView::Console),
+    },
+    PaletteEntry {
+        title: "View: WebSockets",
+        hint: "ws frames streaming realtime",
+        command: PaletteCommand::View(WorkbenchView::WebSockets),
     },
     PaletteEntry {
         title: "View: Storage",

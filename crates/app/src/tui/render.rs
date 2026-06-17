@@ -4,10 +4,10 @@ use super::layout::{DensityMode, LayoutMode};
 use super::state::{
     BodyTreeItem, CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane, InputMode,
     RequestTreeMeta, RequestView, WorkbenchState, WorkbenchView, domain_for_url,
-    formatted_request_body, formatted_response_body, path_for_url,
+    formatted_request_body, formatted_response_body, path_for_url, websocket_opcode_label,
 };
 use crate::config::Theme;
-use devbench_core::{ConsoleLevel, ConsoleLog};
+use devbench_core::{ConsoleLevel, ConsoleLog, WebSocketFrameDirection, WebSocketFrameRecord};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -69,6 +69,7 @@ fn render_normal_content(frame: &mut ratatui::Frame, area: Rect, app: &mut Workb
     match app.view {
         WorkbenchView::Network => render_network_view(frame, area, app),
         WorkbenchView::Console => render_console(frame, area, app),
+        WorkbenchView::WebSockets => render_websockets(frame, area, app),
         WorkbenchView::Storage => render_storage(frame, area, app),
         WorkbenchView::Cookies => render_cookies(frame, area, app),
     }
@@ -87,6 +88,12 @@ fn render_view_rail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState
             app.console_logs.len(),
             app.view == WorkbenchView::Console,
             console_error_count(app) > 0,
+        ),
+        rail_item(
+            "W",
+            app.websocket_frames.len(),
+            app.view == WorkbenchView::WebSockets,
+            false,
         ),
         rail_item(
             "S",
@@ -188,6 +195,7 @@ fn render_focused_layout(frame: &mut ratatui::Frame, area: Rect, app: &mut Workb
         FocusPane::Detail => render_detail(frame, area, app),
         FocusPane::Body => render_body(frame, area, app),
         FocusPane::Console => render_console(frame, area, app),
+        FocusPane::WebSockets => render_websockets(frame, area, app),
         FocusPane::Storage => render_storage(frame, area, app),
         FocusPane::Cookies => render_cookies(frame, area, app),
     }
@@ -895,6 +903,229 @@ fn console_detail_lines(log: &ConsoleLog) -> Vec<Line<'static>> {
     lines
 }
 
+fn render_websockets(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
+    if app.websocket_frames.is_empty() {
+        let paragraph = Paragraph::new(vec![
+            Line::styled("No WebSocket frames captured yet.", muted_style()),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("o ", key_style()),
+                Span::raw("open browser and attach CDP"),
+            ]),
+            Line::from(vec![
+                Span::styled("/", key_style()),
+                Span::raw("filter frames  "),
+                Span::styled("j/k ", key_style()),
+                Span::raw("select"),
+            ]),
+        ])
+        .block(panel_block(
+            "WebSockets",
+            app.focus == FocusPane::WebSockets,
+        ))
+        .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(8)])
+        .split(area);
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(44), Constraint::Percentage(56)])
+        .split(root[1]);
+
+    frame.render_widget(
+        Paragraph::new(websocket_summary_lines(app)).style(Style::default().fg(GB_FG)),
+        root[0],
+    );
+    render_websocket_stream(frame, body[0], app);
+    render_websocket_detail(frame, body[1], app);
+}
+
+fn render_websocket_stream(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
+    let items = app
+        .filtered_websocket_indices
+        .iter()
+        .filter_map(|index| app.websocket_frames.get(*index))
+        .map(websocket_stream_item)
+        .collect::<Vec<_>>();
+    let title = if app.request_filter.is_empty() {
+        format!(
+            "WebSocket Stream {}/{}",
+            app.filtered_websocket_indices.len(),
+            app.websocket_frames.len()
+        )
+    } else {
+        format!(
+            "WebSocket Stream /{} ({}/{})",
+            app.request_filter,
+            app.filtered_websocket_indices.len(),
+            app.websocket_frames.len()
+        )
+    };
+    let list = List::new(items)
+        .block(panel_block(title, app.focus == FocusPane::WebSockets))
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol("> ");
+    frame.render_stateful_widget(list, area, &mut app.websocket_state);
+}
+
+fn render_websocket_detail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
+    let selected = app.selected_websocket_frame();
+    let lines = selected
+        .map(websocket_detail_lines)
+        .unwrap_or_else(|| vec![Line::styled("No frame selected.", muted_style())]);
+    let title = selected
+        .map(|frame| {
+            format!(
+                "Frame {} {}",
+                direction_label(frame),
+                websocket_opcode_label(frame.opcode)
+            )
+        })
+        .unwrap_or_else(|| "Frame Detail".to_string());
+    frame.render_widget(
+        Paragraph::new(faded_lines(
+            lines,
+            app.websocket_detail_scroll,
+            area,
+            &app.config.theme,
+            app.config.ui.bottom_fade_rows,
+        ))
+        .block(panel_block(title, app.focus == FocusPane::WebSockets))
+        .scroll((app.websocket_detail_scroll, 0))
+        .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn websocket_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
+    let sent = app
+        .websocket_frames
+        .iter()
+        .filter(|frame| matches!(frame.direction, WebSocketFrameDirection::Sent))
+        .count();
+    let received = app.websocket_frames.len().saturating_sub(sent);
+    let bytes = app
+        .websocket_frames
+        .iter()
+        .map(|frame| frame.payload.len())
+        .sum::<usize>();
+    let connections = app
+        .websocket_frames
+        .iter()
+        .map(|frame| frame.browser_request_id.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+
+    vec![
+        Line::from(vec![
+            Span::styled("frames ", label_style()),
+            Span::raw(format!(
+                "{}/{}",
+                app.filtered_websocket_indices.len(),
+                app.websocket_frames.len()
+            )),
+            Span::styled("  conns ", label_style()),
+            Span::raw(connections.to_string()),
+            Span::styled("  in ", label_style()),
+            Span::styled(received.to_string(), Style::default().fg(GB_BLUE)),
+            Span::styled("  out ", label_style()),
+            Span::styled(sent.to_string(), Style::default().fg(GB_GREEN)),
+            Span::styled("  payload ", label_style()),
+            Span::raw(format_bytes(bytes as i64)),
+        ]),
+        Line::from(vec![
+            Span::styled("j/k ", key_style()),
+            Span::raw("select  "),
+            Span::styled("u/d ", key_style()),
+            Span::raw("scroll payload  "),
+            Span::styled("/", key_style()),
+            Span::raw("filter  "),
+            Span::styled("g/G ", key_style()),
+            Span::raw("top/bottom"),
+        ]),
+    ]
+}
+
+fn websocket_stream_item(frame: &WebSocketFrameRecord) -> ListItem<'static> {
+    let direction_style = match frame.direction {
+        WebSocketFrameDirection::Sent => Style::default().fg(GB_GREEN).add_modifier(Modifier::BOLD),
+        WebSocketFrameDirection::Received => {
+            Style::default().fg(GB_BLUE).add_modifier(Modifier::BOLD)
+        }
+    };
+    ListItem::new(Line::from(vec![
+        Span::styled(format!("{:<3}", direction_label(frame)), direction_style),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:<6}", websocket_opcode_label(frame.opcode)),
+            Style::default().fg(GB_YELLOW),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("{:>7}", format_bytes(frame.payload.len() as i64)),
+            muted_style(),
+        ),
+        Span::raw(" "),
+        Span::raw(compact_value(&frame.payload, 80)),
+    ]))
+}
+
+fn websocket_detail_lines(frame: &WebSocketFrameRecord) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("direction ", label_style()),
+            Span::raw(direction_label(frame).to_string()),
+            Span::styled("  opcode ", label_style()),
+            Span::raw(format!(
+                "{} ({})",
+                frame.opcode,
+                websocket_opcode_label(frame.opcode)
+            )),
+            Span::styled("  size ", label_style()),
+            Span::raw(format_bytes(frame.payload.len() as i64)),
+        ]),
+        Line::from(vec![
+            Span::styled("time ", label_style()),
+            Span::raw(frame.ts.to_string()),
+            Span::styled("  request ", label_style()),
+            Span::raw(frame.browser_request_id.clone()),
+            Span::styled("  mask ", label_style()),
+            Span::raw(if frame.mask { "yes" } else { "no" }),
+        ]),
+        Line::raw(""),
+        Line::styled("payload", label_style()),
+    ];
+    lines.extend(format_websocket_payload(frame));
+    lines
+}
+
+fn format_websocket_payload(frame: &WebSocketFrameRecord) -> Vec<Line<'static>> {
+    let payload = frame.payload.clone();
+    if websocket_opcode_label(frame.opcode) == "text"
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload)
+    {
+        return syntax_body_lines(
+            serde_json::to_string_pretty(&value).unwrap_or_else(|_| payload.clone()),
+        );
+    }
+    payload
+        .lines()
+        .map(|line| Line::raw(line.to_string()))
+        .collect::<Vec<_>>()
+}
+
+fn direction_label(frame: &WebSocketFrameRecord) -> &'static str {
+    match frame.direction {
+        WebSocketFrameDirection::Sent => "out",
+        WebSocketFrameDirection::Received => "in",
+    }
+}
+
 fn render_storage(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -1044,7 +1275,7 @@ fn render_help_modal(frame: &mut ratatui::Frame, app: &WorkbenchState) {
             Span::raw(" palette  "),
             Span::styled("tab", key_style()),
             Span::raw(" focus  "),
-            Span::styled("1-4", key_style()),
+            Span::styled("1-5", key_style()),
             Span::raw(" views  "),
             Span::styled("j/k", key_style()),
             Span::raw(" move  "),
@@ -1468,7 +1699,7 @@ fn compact_help_line() -> Line<'static> {
         Span::raw(" quit  "),
         Span::styled("/", key_style()),
         Span::raw(" filter  "),
-        Span::styled("1-4", key_style()),
+        Span::styled("1-5", key_style()),
         Span::raw(" views  "),
         Span::styled("enter", key_style()),
         Span::raw(" route  "),
@@ -2904,6 +3135,10 @@ mod tests {
             console_logs: Vec::new(),
             filtered_console_indices: Vec::new(),
             console_hidden_before: None,
+            websocket_frames: Vec::new(),
+            filtered_websocket_indices: Vec::new(),
+            websocket_state: ListState::default(),
+            websocket_detail_scroll: 0,
             storage_events,
             storage_snapshots,
             storage_selected: 0,
