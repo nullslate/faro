@@ -27,6 +27,9 @@ pub(crate) enum InputOutcome {
     RenameScript,
     DeleteScript,
     ResetScriptTemplates,
+    OpenSessions,
+    SwitchSession,
+    DeleteSession,
     TogglePerf,
 }
 
@@ -80,6 +83,8 @@ pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcom
             }
             _ => InputOutcome::Continue,
         }
+    } else if app.show_sessions {
+        handle_sessions_key(app, key)
     } else if app.sql_result.is_some() {
         handle_sql_result_key(app, key)
     } else if app.show_theme_preview {
@@ -96,6 +101,23 @@ pub(crate) fn handle_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcom
     } else {
         handle_normal_key(app, key)
     }
+}
+
+fn handle_sessions_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('S') => app.close_sessions(),
+        KeyCode::Char('j') | KeyCode::Down => app.next_session(),
+        KeyCode::Char('k') | KeyCode::Up => app.previous_session(),
+        KeyCode::Enter => return InputOutcome::SwitchSession,
+        KeyCode::Char('x') | KeyCode::Delete => return InputOutcome::DeleteSession,
+        KeyCode::Char('p') => {
+            app.close_sessions();
+            app.open_palette();
+        }
+        KeyCode::Char('q') => return InputOutcome::Quit,
+        _ => {}
+    }
+    InputOutcome::Continue
 }
 
 fn handle_sql_result_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
@@ -192,6 +214,7 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             app.toggle_help();
             InputOutcome::Continue
         }
+        KeyCode::Char('S') => InputOutcome::OpenSessions,
         KeyCode::Char('~') => InputOutcome::TogglePerf,
         KeyCode::Char('p') => {
             app.open_palette();
@@ -271,10 +294,6 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
             app.next_sort_mode();
             InputOutcome::Continue
         }
-        KeyCode::Char('S') => {
-            app.toggle_sort_direction();
-            InputOutcome::Continue
-        }
         KeyCode::Char('u') | KeyCode::PageUp => {
             app.scroll_up();
             InputOutcome::Continue
@@ -351,6 +370,7 @@ fn execute_palette_command(app: &mut WorkbenchState) -> InputOutcome {
             InputOutcome::Continue
         }
         PaletteCommand::TogglePerf => InputOutcome::TogglePerf,
+        PaletteCommand::OpenSessions => InputOutcome::OpenSessions,
         PaletteCommand::OpenBrowser => InputOutcome::OpenBrowser,
         PaletteCommand::RefreshPage => InputOutcome::RefreshPage,
         PaletteCommand::CopyCurl => InputOutcome::CopyCurl,

@@ -52,6 +52,9 @@ pub(crate) fn render(frame: &mut ratatui::Frame, app: &mut WorkbenchState) {
     if app.input_mode == InputMode::Palette {
         modals::render_palette(frame, app);
     }
+    if app.show_sessions {
+        modals::render_sessions(frame, app);
+    }
     if app.show_help {
         modals::render_help(frame, app);
     }
@@ -661,18 +664,29 @@ fn visible_request_table_state(app: &WorkbenchState, visible_rows: usize) -> Tab
 
 fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let lines = detail_lines(app);
+    let block = themed_panel_block(
+        detail_title(app),
+        Some('D'),
+        app.focus == FocusPane::Detail,
+        &app.config.theme,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(detail_tab_pills(app)).style(Style::default().fg(app.config.theme.text)),
+        chunks[0],
+    );
 
     let paragraph = Paragraph::new(lines)
-        .block(themed_panel_block(
-            detail_title(app),
-            Some('D'),
-            app.focus == FocusPane::Detail,
-            &app.config.theme,
-        ))
         .style(Style::default().fg(app.config.theme.text))
         .scroll((app.detail_scroll, 0))
         .wrap(Wrap { trim: false });
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, chunks[1]);
 }
 
 fn render_body(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
@@ -1528,6 +1542,7 @@ fn compact_help_line(app: &WorkbenchState) -> Line<'static> {
             ("h/l", "tabs"),
             ("/", "filter"),
             ("r", "replay"),
+            ("S", "sessions"),
             ("p", "palette"),
             ("?", "keys"),
         ]),
@@ -2267,20 +2282,82 @@ fn format_bytes(bytes: i64) -> String {
 
 fn detail_title(app: &WorkbenchState) -> String {
     let Some(request) = app.selected_request() else {
-        return format!(" Request Detail [{}] ", app.detail_tab.label());
-    };
-    let mode = if is_image_request(request) {
-        "image"
-    } else if is_sse_request(request) {
-        "sse"
-    } else {
-        app.detail_tab.label()
+        return " Request Detail ".to_string();
     };
     format!(
-        " Detail [{mode}] {} {} ",
+        " Detail {} {} ",
         request.request.method,
         compact_value(&path_for_url(&request.request.url), 48)
     )
+}
+
+fn detail_tab_pills(app: &WorkbenchState) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, tab) in [
+        DetailTab::Overview,
+        DetailTab::RequestHeaders,
+        DetailTab::RequestBody,
+        DetailTab::ResponseHeaders,
+        DetailTab::ResponseBody,
+        DetailTab::Timing,
+        DetailTab::Replay,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+        if tab == app.detail_tab {
+            spans.extend(detail_tab_pill_spans(
+                short_detail_tab_label(tab),
+                app.config.theme.accent,
+                Color::Rgb(29, 32, 33),
+                true,
+            ));
+        } else {
+            spans.extend(detail_tab_pill_spans(
+                short_detail_tab_label(tab),
+                GB_BG2,
+                app.config.theme.muted,
+                false,
+            ));
+        }
+    }
+    Line::from(spans)
+}
+
+fn detail_tab_pill_spans(
+    label: &'static str,
+    background: Color,
+    foreground: Color,
+    active: bool,
+) -> Vec<Span<'static>> {
+    let label_style = if active {
+        Style::default()
+            .fg(foreground)
+            .bg(background)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(foreground).bg(background)
+    };
+    vec![
+        Span::styled("", Style::default().fg(background)),
+        Span::styled(format!(" {label} "), label_style),
+        Span::styled("", Style::default().fg(background)),
+    ]
+}
+
+fn short_detail_tab_label(tab: DetailTab) -> &'static str {
+    match tab {
+        DetailTab::Overview => "overview",
+        DetailTab::RequestHeaders => "req hdr",
+        DetailTab::RequestBody => "req body",
+        DetailTab::ResponseHeaders => "res hdr",
+        DetailTab::ResponseBody => "res body",
+        DetailTab::Timing => "timing",
+        DetailTab::Replay => "replay",
+    }
 }
 
 fn response_body_title(app: &WorkbenchState) -> String {
@@ -3288,6 +3365,8 @@ mod tests {
             db_path: PathBuf::from("/tmp/faro-test.db"),
             target_url: "http://localhost:5173".to_string(),
             active_session_id: None,
+            sessions: Vec::new(),
+            session_state: ListState::default(),
             requests: Vec::new(),
             request_tree_metas: Vec::new(),
             filtered_request_indices: Vec::new(),
@@ -3339,6 +3418,7 @@ mod tests {
             palette_selected: 0,
             body_search_query: String::new(),
             show_help: false,
+            show_sessions: false,
             show_theme_preview: false,
             show_perf: false,
             perf: Default::default(),

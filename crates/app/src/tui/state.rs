@@ -29,6 +29,8 @@ pub(crate) struct WorkbenchState {
     pub(crate) db_path: std::path::PathBuf,
     pub(crate) target_url: String,
     pub(crate) active_session_id: Option<String>,
+    pub(crate) sessions: Vec<SessionView>,
+    pub(crate) session_state: ListState,
     pub(crate) requests: Vec<RequestView>,
     pub(crate) request_tree_metas: Vec<RequestTreeMeta>,
     pub(crate) filtered_request_indices: Vec<usize>,
@@ -80,6 +82,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) palette_selected: usize,
     pub(crate) body_search_query: String,
     pub(crate) show_help: bool,
+    pub(crate) show_sessions: bool,
     pub(crate) show_theme_preview: bool,
     pub(crate) show_perf: bool,
     pub(crate) perf: PerfStats,
@@ -93,6 +96,13 @@ pub(crate) struct WorkbenchState {
     pub(crate) cdp_websocket_url: Option<String>,
     pub(crate) status: String,
     pub(crate) status_updated_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SessionView {
+    pub(crate) session: Session,
+    pub(crate) request_count: usize,
+    pub(crate) console_error_count: usize,
 }
 
 impl WorkbenchState {
@@ -120,7 +130,9 @@ impl WorkbenchState {
         let mut cookie_events = Vec::new();
         let mut cookie_snapshots = Vec::new();
         let scripts = store.scripts()?;
-        let session = select_session(store.sessions()?, target_url, active_session_id);
+        let session_records = store.sessions()?;
+        let sessions = build_session_views(store, &session_records)?;
+        let session = select_session(session_records, target_url, active_session_id);
         let selected_session_id = session.as_ref().map(|session| session.id.clone());
         if let Some(session) = &session {
             let mut responses_by_request = HashMap::new();
@@ -162,6 +174,18 @@ impl WorkbenchState {
         if !filtered_websocket_indices.is_empty() {
             websocket_state.select(Some(filtered_websocket_indices.len() - 1));
         }
+        let mut session_state = ListState::default();
+        if !sessions.is_empty() {
+            let selected = selected_session_id
+                .as_deref()
+                .and_then(|id| {
+                    sessions
+                        .iter()
+                        .position(|entry| entry.session.id.as_str() == id)
+                })
+                .unwrap_or_else(|| sessions.len() - 1);
+            session_state.select(Some(selected));
+        }
 
         let layout_preference = LayoutPreference::load();
         let initial_request_filter = layout_preference
@@ -180,6 +204,8 @@ impl WorkbenchState {
             db_path: db_path.to_path_buf(),
             target_url: target_url.to_string(),
             active_session_id: selected_session_id,
+            sessions,
+            session_state,
             requests,
             request_tree_metas,
             filtered_request_indices,
@@ -231,6 +257,7 @@ impl WorkbenchState {
             palette_selected: 0,
             body_search_query: String::new(),
             show_help: false,
+            show_sessions: false,
             show_theme_preview: false,
             show_perf: false,
             perf: PerfStats::default(),
@@ -274,6 +301,8 @@ impl WorkbenchState {
         )
         .with_context(|| format!("reload TUI state from {}", self.db_path.display()))?;
         self.active_session_id = loaded.active_session_id;
+        self.sessions = loaded.sessions;
+        self.session_state = loaded.session_state;
         self.requests = loaded.requests;
         self.request_tree_metas = loaded.request_tree_metas;
         self.filtered_route_descendant_counts = HashMap::new();
@@ -358,6 +387,61 @@ impl WorkbenchState {
 
     pub(crate) fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub(crate) fn open_sessions(&mut self) {
+        if self.sessions.is_empty() {
+            self.session_state.select(None);
+        } else if self.session_state.selected().is_none() {
+            let selected = self
+                .active_session_id
+                .as_deref()
+                .and_then(|id| {
+                    self.sessions
+                        .iter()
+                        .position(|entry| entry.session.id.as_str() == id)
+                })
+                .unwrap_or_else(|| self.sessions.len() - 1);
+            self.session_state.select(Some(selected));
+        }
+        self.show_sessions = true;
+    }
+
+    pub(crate) fn close_sessions(&mut self) {
+        self.show_sessions = false;
+    }
+
+    pub(crate) fn next_session(&mut self) {
+        if self.sessions.is_empty() {
+            self.session_state.select(None);
+            return;
+        }
+        let selected = self
+            .session_state
+            .selected()
+            .map(|index| (index + 1).min(self.sessions.len() - 1))
+            .unwrap_or(0);
+        self.session_state.select(Some(selected));
+    }
+
+    pub(crate) fn previous_session(&mut self) {
+        if self.sessions.is_empty() {
+            self.session_state.select(None);
+            return;
+        }
+        let selected = self
+            .session_state
+            .selected()
+            .map(|index| index.saturating_sub(1))
+            .unwrap_or(0);
+        self.session_state.select(Some(selected));
+    }
+
+    pub(crate) fn selected_session_id(&self) -> Option<String> {
+        let selected = self.session_state.selected()?;
+        self.sessions
+            .get(selected)
+            .map(|entry| entry.session.id.clone())
     }
 
     pub(crate) fn toggle_theme_preview(&mut self) {
@@ -1974,6 +2058,28 @@ fn select_session(
         .find(|session| session.root_url.as_deref() == Some(target_url))
 }
 
+fn build_session_views(store: &Store, sessions: &[Session]) -> anyhow::Result<Vec<SessionView>> {
+    sessions
+        .iter()
+        .map(|session| {
+            let requests = store
+                .requests_for_session(&session.id)
+                .with_context(|| format!("load requests for session {}", session.id))?;
+            let console_error_count = store
+                .console_logs_for_session(&session.id)
+                .with_context(|| format!("load console logs for session {}", session.id))?
+                .into_iter()
+                .filter(|log| matches!(log.level, ConsoleLevel::Error | ConsoleLevel::Fatal))
+                .count();
+            Ok(SessionView {
+                session: session.clone(),
+                request_count: requests.len(),
+                console_error_count,
+            })
+        })
+        .collect()
+}
+
 fn adjusted_percent(value: u16, delta: i16) -> u16 {
     clamp_split_percent(value.saturating_add_signed(delta))
 }
@@ -2104,18 +2210,6 @@ impl SortMode {
 }
 
 impl DetailTab {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Overview => "overview",
-            Self::RequestHeaders => "request headers",
-            Self::RequestBody => "request body",
-            Self::ResponseHeaders => "response headers",
-            Self::ResponseBody => "response body",
-            Self::Timing => "timing",
-            Self::Replay => "replay",
-        }
-    }
-
     fn next(self) -> Self {
         match self {
             Self::Overview => Self::RequestHeaders,
@@ -2183,6 +2277,7 @@ pub(crate) enum PaletteCommand {
     ToggleHelp,
     ToggleThemePreview,
     TogglePerf,
+    OpenSessions,
     OpenBrowser,
     RefreshPage,
     CopyCurl,
@@ -2406,6 +2501,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "Debug: Toggle Perf",
         hint: "render timing overlay",
         command: PaletteCommand::TogglePerf,
+    },
+    PaletteEntry {
+        title: "Sessions: Browse",
+        hint: "switch delete captured sessions",
+        command: PaletteCommand::OpenSessions,
     },
     PaletteEntry {
         title: "Theme: Preview",

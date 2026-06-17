@@ -171,6 +171,12 @@ impl Store {
         Ok(sessions)
     }
 
+    pub fn delete_session(&self, id: &str) -> Result<usize> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM sessions WHERE id = ?1", params![id])?)
+    }
+
     pub fn insert_tab(&self, tab: &Tab) -> Result<()> {
         self.conn.execute(
             "INSERT INTO tabs (id, session_id, created_at, current_url, title)
@@ -1463,6 +1469,37 @@ mod tests {
         let logs = store.console_logs_for_session(&session.id)?;
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].message, "hello from localhost");
+        Ok(())
+    }
+
+    #[test]
+    fn deletes_session_and_cascades_children() -> TestResult {
+        let store = Store::open_memory()?;
+        let session = Session::new(None, Some("http://localhost:3000".to_string()));
+        let tab = Tab::new(session.id.clone(), session.root_url.clone());
+        let run = Run::new(
+            session.id.clone(),
+            tab.id.clone(),
+            "http://localhost:3000".to_string(),
+            RunTrigger::InitialLoad,
+        );
+        let request = RequestRecord::started(
+            session.id.clone(),
+            Some(tab.id.clone()),
+            Some(run.id.clone()),
+            "GET",
+            "http://localhost:3000/api",
+        );
+
+        store.insert_session(&session)?;
+        store.insert_tab(&tab)?;
+        store.insert_run(&run)?;
+        store.insert_request(&request)?;
+
+        assert_eq!(store.requests_for_session(&session.id)?.len(), 1);
+        assert_eq!(store.delete_session(&session.id)?, 1);
+        assert!(!store.session_exists(&session.id)?);
+        assert!(store.requests_for_session(&session.id)?.is_empty());
         Ok(())
     }
 

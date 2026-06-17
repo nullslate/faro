@@ -100,7 +100,7 @@ Common keys:
 ```text
 q/esc   quit
 tab     switch focus
-1-5     switch views: Network, Console, WebSockets, Storage, Cookies
+1-6     switch views: Network, Console, WebSockets, Scripts, Storage, Cookies
 j/k     move focused selection
 enter   drill into a route / expand selected tree item
 backspace go up one route level
@@ -112,7 +112,8 @@ w       save selected request/response exchange to /tmp
 r       replay selected request with curl
 R       edit selected request in $EDITOR, then replay
 D       diff original response body against latest replay response body
-s/S     cycle request sort / toggle sort direction
+s       cycle request sort
+S       open sessions manager
 f       cycle quick network filter preset
 e       open selected item in $EDITOR
 u/d     scroll focused detail/body pane
@@ -121,6 +122,8 @@ g/G     jump to top/bottom in focused pane
 ?       floating key/filter help
 c       clear request filter
 ```
+
+The sessions manager lets you switch between captured sessions and delete old sessions from the database. Press `S`, move with `j/k`, press `enter` to open a session, or `x` to delete the selected session.
 
 Request filters support plain text, structured fields, and case-insensitive regex patterns:
 

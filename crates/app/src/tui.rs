@@ -223,6 +223,9 @@ fn run_loop(
                         InputOutcome::RenameScript => rename_selected_script(terminal, app)?,
                         InputOutcome::DeleteScript => delete_selected_script(app),
                         InputOutcome::ResetScriptTemplates => reset_script_templates(app),
+                        InputOutcome::OpenSessions => app.open_sessions(),
+                        InputOutcome::SwitchSession => switch_selected_session(app)?,
+                        InputOutcome::DeleteSession => delete_selected_session(app)?,
                         InputOutcome::TogglePerf => app.toggle_perf(),
                     }
                     if outcome != InputOutcome::ToggleMaximize
@@ -258,6 +261,81 @@ fn run_loop(
     }
 }
 
+fn switch_selected_session(app: &mut WorkbenchState) -> anyhow::Result<()> {
+    let Some(session_id) = app.selected_session_id() else {
+        app.status = "no session selected".to_string();
+        return Ok(());
+    };
+    let store = Store::open(&app.db_path)
+        .with_context(|| format!("open database {}", app.db_path.display()))?;
+    let last_sql_query = app.last_sql_query.clone();
+    let view = app.view;
+    let focus = app.focus;
+    let mut loaded = WorkbenchState::load_for_session(
+        &store,
+        &app.db_path,
+        &app.target_url,
+        app.config.clone(),
+        Some(&session_id),
+    )
+    .with_context(|| format!("load session {session_id} from {}", app.db_path.display()))?;
+    loaded.last_sql_query = last_sql_query;
+    loaded.view = view;
+    loaded.focus = focus;
+    loaded.show_sessions = false;
+    loaded.status = format!("opened session {}", compact_id(&session_id));
+    *app = loaded;
+    Ok(())
+}
+
+fn delete_selected_session(app: &mut WorkbenchState) -> anyhow::Result<()> {
+    let Some(session_id) = app.selected_session_id() else {
+        app.status = "no session selected".to_string();
+        return Ok(());
+    };
+    let store = Store::open(&app.db_path)
+        .with_context(|| format!("open database {}", app.db_path.display()))?;
+    let deleted = store
+        .delete_session(&session_id)
+        .with_context(|| format!("delete session {session_id}"))?;
+    if deleted == 0 {
+        app.status = format!("session {} was already gone", compact_id(&session_id));
+        app.reload()
+            .with_context(|| format!("reload TUI state from {}", app.db_path.display()))?;
+        app.open_sessions();
+        return Ok(());
+    }
+
+    let last_sql_query = app.last_sql_query.clone();
+    let view = app.view;
+    let focus = app.focus;
+    let next_session_id = store
+        .sessions()
+        .context("load sessions after delete")?
+        .into_iter()
+        .last()
+        .map(|session| session.id);
+    let mut loaded = WorkbenchState::load_for_session(
+        &store,
+        &app.db_path,
+        &app.target_url,
+        app.config.clone(),
+        next_session_id.as_deref(),
+    )
+    .with_context(|| format!("reload after deleting session {session_id}"))?;
+    loaded.last_sql_query = last_sql_query;
+    loaded.view = view;
+    loaded.focus = focus;
+    loaded.show_sessions = true;
+    loaded.status = format!("deleted session {}", compact_id(&session_id));
+    *app = loaded;
+    Ok(())
+}
+
+fn compact_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
 fn handle_mouse(app: &mut WorkbenchState, mouse: MouseEvent, area: Rect) -> bool {
     match mouse.kind {
         MouseEventKind::ScrollDown => {
@@ -283,7 +361,7 @@ fn handle_mouse_click(app: &mut WorkbenchState, mouse: MouseEvent, area: Rect) {
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),
+            Constraint::Length(3),
             Constraint::Min(14),
             Constraint::Length(2),
         ])
