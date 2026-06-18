@@ -1880,20 +1880,96 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+struct ClipboardTool {
+    label: &'static str,
+    command: &'static str,
+    args: &'static [&'static str],
+}
+
+#[cfg(target_os = "macos")]
+const CLIPBOARD_TOOLS: &[ClipboardTool] = &[
+    ClipboardTool {
+        label: "pbcopy",
+        command: "pbcopy",
+        args: &[],
+    },
+    ClipboardTool {
+        label: "wl-copy",
+        command: "wl-copy",
+        args: &[],
+    },
+    ClipboardTool {
+        label: "xclip",
+        command: "xclip",
+        args: &["-selection", "clipboard"],
+    },
+    ClipboardTool {
+        label: "xsel",
+        command: "xsel",
+        args: &["--clipboard", "--input"],
+    },
+];
+
+#[cfg(target_os = "windows")]
+const CLIPBOARD_TOOLS: &[ClipboardTool] = &[
+    ClipboardTool {
+        label: "clip.exe",
+        command: "clip.exe",
+        args: &[],
+    },
+    ClipboardTool {
+        label: "powershell Set-Clipboard",
+        command: "powershell.exe",
+        args: &["-NoProfile", "-Command", "Set-Clipboard"],
+    },
+    ClipboardTool {
+        label: "pwsh Set-Clipboard",
+        command: "pwsh.exe",
+        args: &["-NoProfile", "-Command", "Set-Clipboard"],
+    },
+];
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const CLIPBOARD_TOOLS: &[ClipboardTool] = &[
+    ClipboardTool {
+        label: "wl-copy",
+        command: "wl-copy",
+        args: &[],
+    },
+    ClipboardTool {
+        label: "xclip",
+        command: "xclip",
+        args: &["-selection", "clipboard"],
+    },
+    ClipboardTool {
+        label: "xsel",
+        command: "xsel",
+        args: &["--clipboard", "--input"],
+    },
+    ClipboardTool {
+        label: "clip.exe",
+        command: "clip.exe",
+        args: &[],
+    },
+    ClipboardTool {
+        label: "powershell Set-Clipboard",
+        command: "powershell.exe",
+        args: &["-NoProfile", "-Command", "Set-Clipboard"],
+    },
+    ClipboardTool {
+        label: "pwsh Set-Clipboard",
+        command: "pwsh",
+        args: &["-NoProfile", "-Command", "Set-Clipboard"],
+    },
+];
+
 fn copy_to_clipboard(text: &str) -> anyhow::Result<&'static str> {
-    for tool in ["pbcopy", "wl-copy", "xclip", "xsel"] {
-        if command_exists(tool) {
-            let mut child = match tool {
-                "xclip" => Command::new(tool)
-                    .args(["-selection", "clipboard"])
-                    .stdin(Stdio::piped())
-                    .spawn()?,
-                "xsel" => Command::new(tool)
-                    .args(["--clipboard", "--input"])
-                    .stdin(Stdio::piped())
-                    .spawn()?,
-                _ => Command::new(tool).stdin(Stdio::piped()).spawn()?,
-            };
+    for tool in CLIPBOARD_TOOLS {
+        if command_exists(tool.command) {
+            let mut child = Command::new(tool.command)
+                .args(tool.args)
+                .stdin(Stdio::piped())
+                .spawn()?;
             if let Some(stdin) = child.stdin.as_mut() {
                 stdin
                     .write_all(text.as_bytes())
@@ -1901,11 +1977,11 @@ fn copy_to_clipboard(text: &str) -> anyhow::Result<&'static str> {
             }
             let status = child.wait().context("wait for clipboard command")?;
             if status.success() {
-                return Ok(tool);
+                return Ok(tool.label);
             }
         }
     }
-    anyhow::bail!("pbcopy/wl-copy/xclip/xsel not found or failed")
+    anyhow::bail!("no supported clipboard command found or all clipboard commands failed")
 }
 
 fn parse_http_status(output: &[u8]) -> Option<i64> {
