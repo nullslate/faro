@@ -103,6 +103,10 @@ pub(crate) struct SessionView {
     pub(crate) session: Session,
     pub(crate) request_count: usize,
     pub(crate) console_error_count: usize,
+    pub(crate) replay_count: usize,
+    pub(crate) websocket_count: usize,
+    pub(crate) storage_count: usize,
+    pub(crate) cookie_count: usize,
 }
 
 impl WorkbenchState {
@@ -1862,12 +1866,19 @@ impl WorkbenchState {
                 .count()
                 .max(1),
             (DetailTab::Timing, Some(_)) => 6,
-            (DetailTab::Replay, Some(request)) => request
-                .replays
-                .last()
-                .and_then(|replay| replay.body.as_deref())
-                .map(|body| body.lines().count() + 8)
-                .unwrap_or(1),
+            (DetailTab::Replay, Some(request)) => {
+                let body_lines = request
+                    .replays
+                    .last()
+                    .and_then(|replay| replay.body.as_deref())
+                    .map(|body| body.lines().count().min(60))
+                    .unwrap_or(1);
+                if request.replays.is_empty() {
+                    3
+                } else {
+                    13 + request.replays.len().min(8) + body_lines
+                }
+            }
         };
         count.min(u16::MAX as usize) as u16
     }
@@ -2062,19 +2073,17 @@ fn build_session_views(store: &Store, sessions: &[Session]) -> anyhow::Result<Ve
     sessions
         .iter()
         .map(|session| {
-            let requests = store
-                .requests_for_session(&session.id)
-                .with_context(|| format!("load requests for session {}", session.id))?;
-            let console_error_count = store
-                .console_logs_for_session(&session.id)
-                .with_context(|| format!("load console logs for session {}", session.id))?
-                .into_iter()
-                .filter(|log| matches!(log.level, ConsoleLevel::Error | ConsoleLevel::Fatal))
-                .count();
+            let counts = store
+                .session_summary_counts(&session.id)
+                .with_context(|| format!("load session summary for {}", session.id))?;
             Ok(SessionView {
                 session: session.clone(),
-                request_count: requests.len(),
-                console_error_count,
+                request_count: counts.requests,
+                console_error_count: counts.console_errors,
+                replay_count: counts.replays,
+                websocket_count: counts.websocket_frames,
+                storage_count: counts.storage_events,
+                cookie_count: counts.cookie_events,
             })
         })
         .collect()
@@ -2281,6 +2290,7 @@ pub(crate) enum PaletteCommand {
     OpenBrowser,
     RefreshPage,
     CopyCurl,
+    CopyShareBundle,
     SaveExchange,
     Replay,
     EditReplay,
@@ -2526,6 +2536,11 @@ const PALETTE_ENTRIES: &[PaletteEntry] = &[
         title: "Copy Curl",
         hint: "selected request",
         command: PaletteCommand::CopyCurl,
+    },
+    PaletteEntry {
+        title: "Copy Share Bundle",
+        hint: "redacted markdown request replay",
+        command: PaletteCommand::CopyShareBundle,
     },
     PaletteEntry {
         title: "Save Exchange",

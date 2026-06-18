@@ -6,7 +6,7 @@ mod perf;
 use super::layout::{DensityMode, LayoutMode};
 use super::state::{
     BodyTreeItem, CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane, InputMode,
-    RequestTreeMeta, RequestView, WorkbenchState, WorkbenchView, domain_for_url,
+    ReplayView, RequestTreeMeta, RequestView, WorkbenchState, WorkbenchView, domain_for_url,
     formatted_request_body, formatted_response_body, path_for_url, websocket_opcode_label,
 };
 use crate::config::Theme;
@@ -672,13 +672,15 @@ fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let tab_lines = detail_tab_lines(app, inner.width);
+    let tab_height = tab_lines.len().max(1) as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .constraints([Constraint::Length(tab_height), Constraint::Min(1)])
         .split(inner);
 
     frame.render_widget(
-        Paragraph::new(detail_tab_pills(app)).style(Style::default().fg(app.config.theme.text)),
+        Paragraph::new(tab_lines).style(Style::default().fg(app.config.theme.text)),
         chunks[0],
     );
 
@@ -2291,9 +2293,68 @@ fn detail_title(app: &WorkbenchState) -> String {
     )
 }
 
-fn detail_tab_pills(app: &WorkbenchState) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (index, tab) in [
+fn detail_tab_lines(app: &WorkbenchState, width: u16) -> Vec<Line<'static>> {
+    let max_width = usize::from(width.saturating_sub(1)).max(8);
+    let short = pack_detail_tab_segments(
+        detail_tab_segments(app, DetailTabLabelMode::Short),
+        max_width,
+    );
+    if short.len() <= 2 && short.iter().all(|line| line_width(line) <= max_width) {
+        return short;
+    }
+
+    pack_detail_tab_segments(
+        detail_tab_segments(app, DetailTabLabelMode::Tiny),
+        max_width,
+    )
+}
+
+fn detail_tab_segments(
+    app: &WorkbenchState,
+    label_mode: DetailTabLabelMode,
+) -> Vec<Vec<Span<'static>>> {
+    detail_tabs()
+        .iter()
+        .copied()
+        .map(|tab| detail_tab_spans(tab, app, label_mode))
+        .collect()
+}
+
+fn pack_detail_tab_segments(
+    segments: Vec<Vec<Span<'static>>>,
+    max_width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut current_width: usize = 0;
+    for segment in segments {
+        let segment_width = spans_width(&segment);
+        let separator_width = usize::from(!current.is_empty());
+        if !current.is_empty()
+            && current_width
+                .saturating_add(separator_width)
+                .saturating_add(segment_width)
+                > max_width
+        {
+            lines.push(Line::from(current));
+            current = Vec::new();
+            current_width = 0;
+        }
+        if !current.is_empty() {
+            current.push(Span::raw(" "));
+            current_width += 1;
+        }
+        current_width += segment_width;
+        current.extend(segment);
+    }
+    if !current.is_empty() {
+        lines.push(Line::from(current));
+    }
+    lines
+}
+
+fn detail_tabs() -> &'static [DetailTab] {
+    &[
         DetailTab::Overview,
         DetailTab::RequestHeaders,
         DetailTab::RequestBody,
@@ -2302,29 +2363,33 @@ fn detail_tab_pills(app: &WorkbenchState) -> Line<'static> {
         DetailTab::Timing,
         DetailTab::Replay,
     ]
-    .into_iter()
-    .enumerate()
-    {
-        if index > 0 {
-            spans.push(Span::raw(" "));
-        }
-        if tab == app.detail_tab {
-            spans.extend(detail_tab_pill_spans(
-                short_detail_tab_label(tab),
-                app.config.theme.accent,
-                Color::Rgb(29, 32, 33),
-                true,
-            ));
-        } else {
-            spans.extend(detail_tab_pill_spans(
-                short_detail_tab_label(tab),
-                GB_BG2,
-                app.config.theme.muted,
-                false,
-            ));
-        }
+}
+
+fn line_width(line: &Line<'_>) -> usize {
+    spans_width(&line.spans)
+}
+
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans.iter().map(|span| span.content.chars().count()).sum()
+}
+
+fn detail_tab_spans(
+    tab: DetailTab,
+    app: &WorkbenchState,
+    label_mode: DetailTabLabelMode,
+) -> Vec<Span<'static>> {
+    let label = detail_tab_label(tab, label_mode);
+    if tab == app.detail_tab {
+        detail_tab_pill_spans(label, app.config.theme.accent, Color::Rgb(29, 32, 33), true)
+    } else {
+        detail_tab_pill_spans(label, GB_BG2, app.config.theme.muted, false)
     }
-    Line::from(spans)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DetailTabLabelMode {
+    Short,
+    Tiny,
 }
 
 fn detail_tab_pill_spans(
@@ -2348,15 +2413,26 @@ fn detail_tab_pill_spans(
     ]
 }
 
-fn short_detail_tab_label(tab: DetailTab) -> &'static str {
-    match tab {
-        DetailTab::Overview => "overview",
-        DetailTab::RequestHeaders => "req hdr",
-        DetailTab::RequestBody => "req body",
-        DetailTab::ResponseHeaders => "res hdr",
-        DetailTab::ResponseBody => "res body",
-        DetailTab::Timing => "timing",
-        DetailTab::Replay => "replay",
+fn detail_tab_label(tab: DetailTab, mode: DetailTabLabelMode) -> &'static str {
+    match mode {
+        DetailTabLabelMode::Short => match tab {
+            DetailTab::Overview => "overview",
+            DetailTab::RequestHeaders => "req hdr",
+            DetailTab::RequestBody => "req body",
+            DetailTab::ResponseHeaders => "res hdr",
+            DetailTab::ResponseBody => "res body",
+            DetailTab::Timing => "timing",
+            DetailTab::Replay => "replay",
+        },
+        DetailTabLabelMode::Tiny => match tab {
+            DetailTab::Overview => "o",
+            DetailTab::RequestHeaders => "qH",
+            DetailTab::RequestBody => "qB",
+            DetailTab::ResponseHeaders => "sH",
+            DetailTab::ResponseBody => "sB",
+            DetailTab::Timing => "t",
+            DetailTab::Replay => "r",
+        },
     }
 }
 
@@ -3396,8 +3472,8 @@ mod tests {
     use crate::config::AppConfig;
     use crate::tui::state::{InputMode, SortMode};
     use faro_core::{
-        CookieEventRecord, CookieRecord, CookieSnapshotRecord, RequestRecord, ResponseRecord,
-        StorageEntry, StorageEventRecord, StorageSnapshotRecord,
+        CookieEventRecord, CookieRecord, CookieSnapshotRecord, ReplayRecord, RequestRecord,
+        ResponseRecord, StorageEntry, StorageEventRecord, StorageSnapshotRecord,
     };
     use faro_store::ScriptRecord;
     use ratatui::widgets::{ListState, TableState};
@@ -3864,6 +3940,80 @@ mod tests {
         ] {
             assert!(text.contains(expected));
         }
+    }
+
+    #[test]
+    fn detail_tabs_only_show_interactive_pills() {
+        let app = state_with_storage(Vec::new(), Vec::new());
+        let text = detail_tab_lines(&app, 120)
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .map(|span| span.content)
+            .collect::<String>();
+
+        for expected in [
+            "overview", "req hdr", "req body", "res hdr", "res body", "timing", "replay",
+        ] {
+            assert!(text.contains(expected));
+        }
+        for label in ["meta", "request", "response", "tools"] {
+            assert!(!text.contains(label));
+        }
+    }
+
+    #[test]
+    fn detail_tabs_wrap_and_compact_when_narrow() {
+        let app = state_with_storage(Vec::new(), Vec::new());
+        let lines = detail_tab_lines(&app, 44);
+
+        assert!(lines.len() >= 2);
+        for line in lines {
+            assert!(line_width(&line) <= 43);
+        }
+    }
+
+    #[test]
+    fn replay_lines_show_history_and_latest_body() {
+        let mut request = response_request("application/json", "fetch", "https://example.test/api");
+        let mut first = ReplayRecord::new(
+            "session".to_string(),
+            None,
+            None,
+            request.request.id.clone(),
+            "curl first".to_string(),
+        );
+        first.status_code = Some(500);
+        first.exit_code = Some(0);
+        let mut second = ReplayRecord::new(
+            "session".to_string(),
+            None,
+            None,
+            request.request.id.clone(),
+            "curl second".to_string(),
+        );
+        second.status_code = Some(200);
+        second.exit_code = Some(0);
+        request.replays = vec![
+            ReplayView {
+                record: first,
+                body: Some(r#"{"ok":false}"#.to_string()),
+            },
+            ReplayView {
+                record: second,
+                body: Some(r#"{"ok":true}"#.to_string()),
+            },
+        ];
+
+        let text = replay_lines(&request)
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert!(text.contains("history 2"));
+        assert!(text.contains("recent replays"));
+        assert!(text.contains("latest response body"));
+        assert!(text.contains("\"ok\""));
     }
 
     #[test]
@@ -4483,11 +4633,44 @@ fn timing_lines(request: &RequestView) -> Vec<Line<'static>> {
 }
 
 fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
+    if request.replays.is_empty() {
+        return vec![
+            Line::styled("No replay captured for this request.", muted_style()),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("r ", key_style()),
+                Span::raw("run replay  "),
+                Span::styled("R ", key_style()),
+                Span::raw("edit and replay  "),
+                Span::styled("D ", key_style()),
+                Span::raw("diff latest"),
+            ]),
+        ];
+    };
+
     let Some(replay) = request.replays.last() else {
-        return vec![Line::raw("No replay captured for this request.")];
+        return Vec::new();
     };
 
     let mut lines = vec![
+        Line::from(vec![
+            Span::styled("history ", label_style()),
+            Span::raw(request.replays.len().to_string()),
+            Span::raw("  "),
+            Span::styled("latest ", label_style()),
+            replay_status_span(replay),
+        ]),
+        Line::from(vec![
+            Span::styled("r ", key_style()),
+            Span::raw("run  "),
+            Span::styled("R ", key_style()),
+            Span::raw("edit  "),
+            Span::styled("D ", key_style()),
+            Span::raw("diff latest  "),
+            Span::styled("p ", key_style()),
+            Span::raw("palette"),
+        ]),
+        Line::raw(""),
         labeled_line("replay id", replay.record.id.clone()),
         labeled_line(
             "status",
@@ -4514,18 +4697,71 @@ fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
                 .unwrap_or_else(|| "-".to_string()),
         ),
         labeled_line("command", replay.record.command.clone()),
-        Line::raw(""),
-        Line::styled("response body", label_style()),
-        Line::raw(""),
     ];
+    if let Some(error) = replay.record.error.as_deref() {
+        lines.push(labeled_line("error", compact_value(error, 120)));
+    }
+    lines.extend([
+        Line::raw(""),
+        Line::styled("recent replays", label_style()),
+        Line::raw(""),
+    ]);
+
+    for replay in request.replays.iter().rev().take(8) {
+        lines.push(replay_history_line(replay));
+    }
+
+    lines.extend([
+        Line::raw(""),
+        Line::styled("latest response body", label_style()),
+        Line::raw(""),
+    ]);
 
     if let Some(body) = replay.body.as_deref() {
-        lines.extend(syntax_body_lines(body.to_string()).into_iter().take(80));
+        lines.extend(syntax_body_lines(body.to_string()).into_iter().take(60));
     } else {
         lines.push(Line::raw("(none)"));
     }
 
     lines
+}
+
+fn replay_history_line(replay: &ReplayView) -> Line<'static> {
+    let body = replay
+        .body
+        .as_deref()
+        .map(|body| format!(" body={}", format_bytes(body.len() as i64)))
+        .unwrap_or_default();
+    Line::from(vec![
+        Span::styled(compact_value(&replay.record.id, 12), muted_style()),
+        Span::raw("  "),
+        replay_status_span(replay),
+        Span::raw("  exit="),
+        Span::raw(
+            replay
+                .record
+                .exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        Span::raw("  ts="),
+        Span::styled(replay.record.ts.to_string(), muted_style()),
+        Span::styled(body, muted_style()),
+    ])
+}
+
+fn replay_status_span(replay: &ReplayView) -> Span<'static> {
+    let status = replay
+        .record
+        .status_code
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let style = match replay.record.status_code {
+        Some(200..=399) => label_style(),
+        Some(400..=599) => warning_style(),
+        _ => muted_style(),
+    };
+    Span::styled(status, style)
 }
 
 fn header_lines(title: &'static str, headers: &[faro_core::Header]) -> Vec<Line<'static>> {

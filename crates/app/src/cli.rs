@@ -31,6 +31,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         "console" => handle_console(&options.db_path, args),
         "storage" => handle_storage(&options.db_path, args),
         "cookies" => handle_cookies(&options.db_path, args),
+        "sessions" => handle_sessions(&options.db_path, args),
         "replay" => handle_replay(&options.db_path, args),
         "sql" => handle_sql(&options.db_path, args),
         "show" => {
@@ -77,6 +78,25 @@ pub(crate) struct CliRequestRow {
     pub(crate) duration_ms: Option<i64>,
     pub(crate) body_size: Option<i64>,
     pub(crate) mime_type: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CliSessionRow {
+    id: String,
+    created_at: i64,
+    name: Option<String>,
+    root_url: Option<String>,
+    requests: usize,
+    errors: usize,
+    replays: usize,
+    websocket_frames: usize,
+    storage_events: usize,
+    cookie_events: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct CliSessionsNukeResult {
+    deleted: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -519,6 +539,92 @@ fn handle_cookies(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()
                 cookie.domain, cookie.path, cookie.name, cookie.value
             );
         }
+    }
+    Ok(())
+}
+
+fn handle_sessions(db_path: &PathBuf, mut args: Vec<String>) -> anyhow::Result<()> {
+    let Some(command) = args.first().cloned() else {
+        bail!("usage: faro sessions <list|nuke> [--json] [--yes]");
+    };
+    args.remove(0);
+    match command.as_str() {
+        "list" => handle_sessions_list(db_path, args),
+        "nuke" | "clear" => handle_sessions_nuke(db_path, args),
+        _ => bail!("usage: faro sessions <list|nuke> [--json] [--yes]"),
+    }
+}
+
+fn handle_sessions_list(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
+    let json_output = args.iter().any(|arg| arg == "--json");
+    for arg in &args {
+        if arg != "--json" {
+            bail!("unknown sessions list option: {arg}");
+        }
+    }
+    let store = open_store(db_path)?;
+    let rows = store
+        .sessions()
+        .context("load sessions")?
+        .into_iter()
+        .map(|session| {
+            let counts = store
+                .session_summary_counts(&session.id)
+                .with_context(|| format!("load session summary for {}", session.id))?;
+            anyhow::Ok(CliSessionRow {
+                id: session.id,
+                created_at: session.created_at,
+                name: session.name,
+                root_url: session.root_url,
+                requests: counts.requests,
+                errors: counts.console_errors,
+                replays: counts.replays,
+                websocket_frames: counts.websocket_frames,
+                storage_events: counts.storage_events,
+                cookie_events: counts.cookie_events,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    if json_output {
+        print_json(&rows)?;
+    } else {
+        for row in rows {
+            println!(
+                "{} req={} err={} replay={} ws={} store={} cookie={} {}",
+                row.id,
+                row.requests,
+                row.errors,
+                row.replays,
+                row.websocket_frames,
+                row.storage_events,
+                row.cookie_events,
+                row.root_url.as_deref().unwrap_or("-")
+            );
+        }
+    }
+    Ok(())
+}
+
+fn handle_sessions_nuke(db_path: &PathBuf, args: Vec<String>) -> anyhow::Result<()> {
+    let json_output = args.iter().any(|arg| arg == "--json");
+    let confirmed = args.iter().any(|arg| arg == "--yes" || arg == "-y");
+    for arg in &args {
+        if !matches!(arg.as_str(), "--json" | "--yes" | "-y") {
+            bail!("unknown sessions nuke option: {arg}");
+        }
+    }
+    if !confirmed {
+        bail!("usage: faro sessions nuke --yes [--json]");
+    }
+
+    let store = open_store(db_path)?;
+    let deleted = store.delete_all_sessions().context("delete all sessions")?;
+    let result = CliSessionsNukeResult { deleted };
+    if json_output {
+        print_json(&result)?;
+    } else {
+        println!("deleted {deleted} sessions");
     }
     Ok(())
 }
@@ -1316,6 +1422,8 @@ fn print_help() {
     println!("  faro console errors [--json]");
     println!("  faro storage get <localStorage|sessionStorage> <key> [--json]");
     println!("  faro cookies list [--json]");
+    println!("  faro sessions list [--json]");
+    println!("  faro sessions nuke --yes [--json]");
     println!("  faro replay <request-id> [--json]");
     println!("  faro sql <readonly-query> [--json]");
     println!();

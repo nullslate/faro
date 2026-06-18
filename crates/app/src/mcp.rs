@@ -6,7 +6,7 @@ use crate::cli::{
 };
 use anyhow::{Context, bail};
 use faro_cdp::{CaptureOptions, CaptureUpdate};
-use faro_core::{ReplayRecord, request_replayed_event};
+use faro_core::{ReplayRecord, Session, request_replayed_event};
 use faro_store::inline_text_body;
 use serde_json::{Map, Value, json};
 use std::io::{self, BufRead, Write};
@@ -84,12 +84,15 @@ fn call_tool(options: &CliOptions, params: &Value) -> anyhow::Result<Value> {
     let args = params.get("arguments").unwrap_or(&Value::Null);
     let result = match name {
         "capture_url" => capture_url_tool(options, args),
+        "list_sessions" => list_sessions_tool(&options.db_path),
+        "delete_all_sessions" => delete_all_sessions_tool(&options.db_path, args),
         "list_requests" => list_requests_tool(&options.db_path, args),
         "get_request" => get_request_tool(&options.db_path, args),
         "get_response_body" => get_response_body_tool(&options.db_path, args),
-        "list_console_errors" => list_console_errors_tool(&options.db_path),
+        "list_console_errors" => list_console_errors_tool(&options.db_path, args),
+        "list_storage_items" => list_storage_items_tool(&options.db_path, args),
         "get_storage_item" => get_storage_item_tool(&options.db_path, args),
-        "list_cookies" => list_cookies_tool(&options.db_path),
+        "list_cookies" => list_cookies_tool(&options.db_path, args),
         "copy_request_as_curl" => copy_request_as_curl_tool(&options.db_path, args),
         "replay_request" => replay_request_tool(&options.db_path, args),
         "run_readonly_sql" => run_readonly_sql_tool(&options.db_path, args),
@@ -140,9 +143,7 @@ fn capture_url_tool(options: &CliOptions, args: &Value) -> anyhow::Result<Value>
 
 fn list_requests_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let store = open_store(&db_path.to_path_buf())?;
-    let Some(session) = latest_session(&store)? else {
-        bail!("no faro sessions found");
-    };
+    let session = resolve_session(&store, args)?;
     let filter = optional_string(args, "filter");
     let route = optional_string(args, "route");
     let limit = args
@@ -167,6 +168,48 @@ fn list_requests_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
         .take(limit)
         .collect::<Vec<_>>();
     Ok(json!({ "session_id": session.id, "requests": rows }))
+}
+
+fn list_sessions_tool(db_path: &Path) -> anyhow::Result<Value> {
+    let store = open_store(&db_path.to_path_buf())?;
+    let sessions = store
+        .sessions()
+        .context("load sessions")?
+        .into_iter()
+        .map(|session| {
+            let counts = store
+                .session_summary_counts(&session.id)
+                .with_context(|| format!("load session summary for {}", session.id))?;
+            anyhow::Ok(json!({
+                "id": session.id,
+                "created_at": session.created_at,
+                "name": session.name,
+                "root_url": session.root_url,
+                "counts": {
+                    "requests": counts.requests,
+                    "errors": counts.console_errors,
+                    "replays": counts.replays,
+                    "websocket_frames": counts.websocket_frames,
+                    "storage_events": counts.storage_events,
+                    "cookie_events": counts.cookie_events
+                }
+            }))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(json!({ "sessions": sessions }))
+}
+
+fn delete_all_sessions_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
+    let confirm = args
+        .get("confirm")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !confirm {
+        bail!("delete_all_sessions requires confirm=true");
+    }
+    let store = open_store(&db_path.to_path_buf())?;
+    let deleted = store.delete_all_sessions().context("delete all sessions")?;
+    Ok(json!({ "deleted": deleted }))
 }
 
 fn get_request_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
@@ -211,11 +254,9 @@ fn get_response_body_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value>
     Ok(json!({ "request_id": request_id, "body": body }))
 }
 
-fn list_console_errors_tool(db_path: &Path) -> anyhow::Result<Value> {
+fn list_console_errors_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let store = open_store(&db_path.to_path_buf())?;
-    let Some(session) = latest_session(&store)? else {
-        bail!("no faro sessions found");
-    };
+    let session = resolve_session(&store, args)?;
     let errors = store
         .console_logs_for_session(&session.id)
         .with_context(|| format!("load console logs for session {}", session.id))?
@@ -234,9 +275,7 @@ fn get_storage_item_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> 
     let storage_type = required_string(args, "storage_type")?;
     let key = required_string(args, "key")?;
     let store = open_store(&db_path.to_path_buf())?;
-    let Some(session) = latest_session(&store)? else {
-        bail!("no faro sessions found");
-    };
+    let session = resolve_session(&store, args)?;
     let items = current_storage_items(&store, &session.id)?
         .into_iter()
         .filter(|item| item.storage_type == storage_type && item.key == key)
@@ -244,11 +283,38 @@ fn get_storage_item_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> 
     Ok(json!({ "session_id": session.id, "items": items }))
 }
 
-fn list_cookies_tool(db_path: &Path) -> anyhow::Result<Value> {
+fn list_storage_items_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let store = open_store(&db_path.to_path_buf())?;
-    let Some(session) = latest_session(&store)? else {
-        bail!("no faro sessions found");
-    };
+    let session = resolve_session(&store, args)?;
+    let storage_type = optional_string(args, "storage_type");
+    let key_contains = optional_string(args, "key_contains").map(|value| value.to_lowercase());
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value.min(1000) as usize)
+        .unwrap_or(200);
+    let items = current_storage_items(&store, &session.id)?
+        .into_iter()
+        .filter(|item| {
+            storage_type
+                .as_deref()
+                .map(|storage_type| item.storage_type == storage_type)
+                .unwrap_or(true)
+        })
+        .filter(|item| {
+            key_contains
+                .as_deref()
+                .map(|needle| item.key.to_lowercase().contains(needle))
+                .unwrap_or(true)
+        })
+        .take(limit)
+        .collect::<Vec<_>>();
+    Ok(json!({ "session_id": session.id, "items": items }))
+}
+
+fn list_cookies_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
+    let store = open_store(&db_path.to_path_buf())?;
+    let session = resolve_session(&store, args)?;
     Ok(json!({
         "session_id": session.id,
         "cookies": latest_cookies(&store, &session.id)?
@@ -331,6 +397,18 @@ fn run_readonly_sql_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> 
         "rows": rows,
         "duration_ms": result.duration_ms
     }))
+}
+
+fn resolve_session(store: &faro_store::Store, args: &Value) -> anyhow::Result<Session> {
+    if let Some(session_id) = optional_string(args, "session_id") {
+        return store
+            .sessions()
+            .context("load sessions")?
+            .into_iter()
+            .find(|session| session.id == session_id)
+            .with_context(|| format!("session `{session_id}` not found"));
+    }
+    latest_session(store)?.context("no faro sessions found")
 }
 
 fn capture_update_json(update: CaptureUpdate, db_path: &Path) -> Value {
@@ -440,10 +518,28 @@ fn tools() -> Value {
             )
         ),
         tool(
+            "list_sessions",
+            "List Faro capture sessions with summary counts. Use this first when multiple sessions may exist.",
+            object_schema(&[], &[])
+        ),
+        tool(
+            "delete_all_sessions",
+            "Delete all Faro sessions and cascaded captured data. Requires confirm=true.",
+            object_schema(
+                &[("confirm", "boolean", "Must be true to delete all sessions.")],
+                &["confirm"]
+            )
+        ),
+        tool(
             "list_requests",
-            "List captured network requests from the latest session.",
+            "List captured network requests from a session. Defaults to the latest session.",
             object_schema(
                 &[
+                    (
+                        "session_id",
+                        "string",
+                        "Optional Faro session id. Omit to use the latest session."
+                    ),
                     (
                         "route",
                         "string",
@@ -484,14 +580,51 @@ fn tools() -> Value {
         ),
         tool(
             "list_console_errors",
-            "List console error and fatal logs from the latest session.",
-            object_schema(&[], &[])
+            "List console error and fatal logs from a session. Defaults to the latest session.",
+            object_schema(
+                &[(
+                    "session_id",
+                    "string",
+                    "Optional Faro session id. Omit to use the latest session."
+                )],
+                &[]
+            )
+        ),
+        tool(
+            "list_storage_items",
+            "List current localStorage/sessionStorage items for a session. Useful for discovering auth/session keys.",
+            object_schema(
+                &[
+                    (
+                        "session_id",
+                        "string",
+                        "Optional Faro session id. Omit to use the latest session."
+                    ),
+                    (
+                        "storage_type",
+                        "string",
+                        "Optional storage type: localStorage or sessionStorage."
+                    ),
+                    (
+                        "key_contains",
+                        "string",
+                        "Optional case-insensitive substring filter for keys."
+                    ),
+                    ("limit", "number", "Maximum rows to return, capped at 1000.")
+                ],
+                &[]
+            )
         ),
         tool(
             "get_storage_item",
             "Get current localStorage/sessionStorage values for a key.",
             object_schema(
                 &[
+                    (
+                        "session_id",
+                        "string",
+                        "Optional Faro session id. Omit to use the latest session."
+                    ),
                     ("storage_type", "string", "localStorage or sessionStorage."),
                     ("key", "string", "Storage key.")
                 ],
@@ -500,8 +633,15 @@ fn tools() -> Value {
         ),
         tool(
             "list_cookies",
-            "List cookies from the latest cookie snapshot.",
-            object_schema(&[], &[])
+            "List cookies from a session's latest cookie snapshot. Defaults to the latest session.",
+            object_schema(
+                &[(
+                    "session_id",
+                    "string",
+                    "Optional Faro session id. Omit to use the latest session."
+                )],
+                &[]
+            )
         ),
         tool(
             "copy_request_as_curl",
@@ -551,4 +691,168 @@ fn object_schema(properties: &[(&str, &str, &str)], required: &[&str]) -> Value 
         "properties": props,
         "required": required
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use faro_core::{RequestRecord, Session};
+    use faro_store::Store;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    type TestResult = anyhow::Result<()>;
+
+    fn test_options(db_path: std::path::PathBuf) -> CliOptions {
+        CliOptions {
+            db_path,
+            attach_port: None,
+            launch_port: None,
+            launch_on_start: false,
+        }
+    }
+
+    fn temp_db_path(name: &str) -> anyhow::Result<std::path::PathBuf> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        Ok(std::env::temp_dir().join(format!("faro-mcp-{name}-{}-{now}.db", std::process::id())))
+    }
+
+    fn response_text(response: &Value) -> anyhow::Result<Value> {
+        let text = response
+            .get("result")
+            .and_then(|result| result.get("content"))
+            .and_then(Value::as_array)
+            .and_then(|content| content.first())
+            .and_then(|item| item.get("text"))
+            .and_then(Value::as_str)
+            .context("missing MCP text content")?;
+        serde_json::from_str(text).context("parse MCP tool text content")
+    }
+
+    #[test]
+    fn tools_list_includes_session_tools() -> TestResult {
+        let options = test_options(temp_db_path("tools")?);
+        let response = handle_message(
+            &options,
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }),
+        )
+        .context("missing tools/list response")?;
+        let tools = response
+            .get("result")
+            .and_then(|result| result.get("tools"))
+            .and_then(Value::as_array)
+            .context("missing tools")?;
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"list_sessions"));
+        assert!(names.contains(&"delete_all_sessions"));
+        assert!(names.contains(&"list_storage_items"));
+        Ok(())
+    }
+
+    #[test]
+    fn list_requests_accepts_explicit_session_id() -> TestResult {
+        let db_path = temp_db_path("sessions")?;
+        let first = Session {
+            id: "first".to_string(),
+            created_at: 1,
+            name: Some("first".to_string()),
+            root_url: Some("https://first.test".to_string()),
+        };
+        let second = Session {
+            id: "second".to_string(),
+            created_at: 2,
+            name: Some("second".to_string()),
+            root_url: Some("https://second.test".to_string()),
+        };
+        {
+            let store = Store::open(&db_path)?;
+            store.insert_session(&first)?;
+            store.insert_session(&second)?;
+            store.insert_request(&RequestRecord::started(
+                first.id.clone(),
+                None,
+                None,
+                "GET",
+                "https://first.test/api",
+            ))?;
+            store.insert_request(&RequestRecord::started(
+                second.id.clone(),
+                None,
+                None,
+                "GET",
+                "https://second.test/api",
+            ))?;
+        }
+
+        let options = test_options(db_path.clone());
+        let response = handle_message(
+            &options,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_requests",
+                    "arguments": { "session_id": "first" }
+                }
+            }),
+        )
+        .context("missing tools/call response")?;
+        let value = response_text(&response)?;
+
+        assert_eq!(
+            value.get("session_id").and_then(Value::as_str),
+            Some("first")
+        );
+        let requests = value
+            .get("requests")
+            .and_then(Value::as_array)
+            .context("missing requests")?;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests
+                .first()
+                .and_then(|request| request.get("url"))
+                .and_then(Value::as_str),
+            Some("https://first.test/api")
+        );
+        std::fs::remove_file(db_path).context("remove temp MCP db")?;
+        Ok(())
+    }
+
+    #[test]
+    fn delete_all_sessions_requires_confirmation() -> TestResult {
+        let db_path = temp_db_path("delete")?;
+        {
+            let store = Store::open(&db_path)?;
+            store.insert_session(&Session {
+                id: "session".to_string(),
+                created_at: 1,
+                name: None,
+                root_url: Some("https://example.test".to_string()),
+            })?;
+        }
+        let options = test_options(db_path.clone());
+        let response = handle_message(
+            &options,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "delete_all_sessions",
+                    "arguments": {}
+                }
+            }),
+        )
+        .context("missing tools/call response")?;
+
+        assert!(response.get("error").is_some());
+        assert_eq!(Store::open(&db_path)?.sessions()?.len(), 1);
+        std::fs::remove_file(db_path).context("remove temp MCP db")?;
+        Ok(())
+    }
 }

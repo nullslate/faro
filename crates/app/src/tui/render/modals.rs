@@ -331,8 +331,12 @@ pub(super) fn render_sessions(frame: &mut ratatui::Frame, app: &WorkbenchState) 
                             muted
                         },
                     )),
+                    Cell::from(Span::styled(entry.replay_count.to_string(), muted)),
+                    Cell::from(Span::styled(entry.websocket_count.to_string(), muted)),
+                    Cell::from(Span::styled(entry.storage_count.to_string(), muted)),
+                    Cell::from(Span::styled(entry.cookie_count.to_string(), muted)),
                     Cell::from(Span::styled(session_title(entry), base)),
-                    Cell::from(Span::styled(compact_value(&entry.session.id, 12), muted)),
+                    Cell::from(Span::styled(compact_value(&entry.session.id, 6), muted)),
                 ])
             })
             .collect::<Vec<_>>();
@@ -340,17 +344,23 @@ pub(super) fn render_sessions(frame: &mut ratatui::Frame, app: &WorkbenchState) 
             Table::new(
                 rows,
                 [
-                    Constraint::Length(3),
-                    Constraint::Length(18),
-                    Constraint::Length(7),
-                    Constraint::Length(7),
-                    Constraint::Min(24),
-                    Constraint::Length(14),
+                    Constraint::Length(2),
+                    Constraint::Length(12),
+                    Constraint::Length(5),
+                    Constraint::Length(5),
+                    Constraint::Length(4),
+                    Constraint::Length(4),
+                    Constraint::Length(5),
+                    Constraint::Length(4),
+                    Constraint::Min(28),
+                    Constraint::Length(8),
                 ],
             )
             .header(
-                Row::new(["", "CREATED", "REQS", "ERRS", "SESSION", "ID"])
-                    .style(muted_style().add_modifier(Modifier::BOLD)),
+                Row::new([
+                    "", "CREATED", "REQS", "ERRS", "RPL", "WS", "STORE", "CK", "SESSION", "ID",
+                ])
+                .style(muted_style().add_modifier(Modifier::BOLD)),
             )
             .style(Style::default().fg(GB_FG)),
             chunks[1],
@@ -372,13 +382,31 @@ pub(super) fn render_sessions(frame: &mut ratatui::Frame, app: &WorkbenchState) 
 }
 
 fn session_title(entry: &crate::tui::state::SessionView) -> String {
-    entry
-        .session
-        .name
-        .as_deref()
-        .or(entry.session.root_url.as_deref())
-        .map(|value| compact_value(value, 72))
-        .unwrap_or_else(|| "untitled session".to_string())
+    let Some(root_url) = entry.session.root_url.as_deref() else {
+        return entry
+            .session
+            .name
+            .as_deref()
+            .map(|value| compact_value(value, 72))
+            .unwrap_or_else(|| "untitled session".to_string());
+    };
+    let host = host_for_url(root_url);
+    let name = entry.session.name.as_deref().unwrap_or_default();
+    if name.is_empty() || name == "CDP session" {
+        compact_value(&format!("{host}  {root_url}"), 72)
+    } else {
+        compact_value(&format!("{host}  {name}  {root_url}"), 72)
+    }
+}
+
+fn host_for_url(url: &str) -> String {
+    let without_scheme = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
+    without_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .filter(|host| !host.is_empty())
+        .unwrap_or(url)
+        .to_string()
 }
 
 fn session_created_label(created_at: i64) -> String {
@@ -757,5 +785,45 @@ fn centered_rect(parent: Rect, width: u16, height: u16) -> Rect {
         y: parent.y + parent.height.saturating_sub(height) / 2,
         width,
         height,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::state::SessionView;
+    use faro_core::Session;
+
+    #[test]
+    fn session_title_prefers_domain_over_generic_cdp_name() {
+        let entry = SessionView {
+            session: Session {
+                id: "session".to_string(),
+                created_at: 0,
+                name: Some("CDP session".to_string()),
+                root_url: Some("https://api.example.test/path".to_string()),
+            },
+            request_count: 0,
+            console_error_count: 0,
+            replay_count: 0,
+            websocket_count: 0,
+            storage_count: 0,
+            cookie_count: 0,
+        };
+
+        let title = session_title(&entry);
+
+        assert!(title.starts_with("api.example.test"));
+        assert!(title.contains("https://api.example.test/path"));
+        assert!(!title.starts_with("CDP session"));
+    }
+
+    #[test]
+    fn host_for_url_extracts_domain() {
+        assert_eq!(
+            host_for_url("https://example.test/path?q=1"),
+            "example.test"
+        );
+        assert_eq!(host_for_url("localhost:5173/app"), "localhost:5173");
     }
 }

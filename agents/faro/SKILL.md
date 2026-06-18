@@ -38,35 +38,44 @@ Use a specific database if needed:
 capture_url({ "url": "https://example.com", "duration": "15s" })
 ```
 
-2. List requests, usually filtered by route or status:
+2. List sessions and pick the right capture when more than one exists:
 
 ```text
-list_requests({ "route": "/api", "filter": "status >= 400", "limit": 50 })
+list_sessions({})
 ```
 
-3. Fetch details and bodies:
+Pass the selected `session_id` to list tools when possible.
+
+3. List requests, usually filtered by route or status:
+
+```text
+list_requests({ "session_id": "...", "route": "/api", "filter": "status >= 400", "limit": 50 })
+```
+
+4. Fetch details and bodies:
 
 ```text
 get_request({ "request_id": "...", "include_body": true })
 get_response_body({ "request_id": "..." })
 ```
 
-4. Check client-side failures:
+5. Check client-side failures:
 
 ```text
-list_console_errors({})
-get_storage_item({ "storage_type": "localStorage", "key": "auth" })
-list_cookies({})
+list_console_errors({ "session_id": "..." })
+list_storage_items({ "session_id": "...", "storage_type": "localStorage", "key_contains": "auth" })
+get_storage_item({ "session_id": "...", "storage_type": "localStorage", "key": "auth" })
+list_cookies({ "session_id": "..." })
 ```
 
-5. Reproduce or share requests:
+6. Reproduce or share requests:
 
 ```text
 copy_request_as_curl({ "request_id": "..." })
 replay_request({ "request_id": "..." })
 ```
 
-6. Use SQL for ad hoc analysis. SQL must be read-only:
+7. Use SQL for ad hoc analysis. SQL must be read-only:
 
 ```text
 run_readonly_sql({ "query": "select id, method, url, status_code from requests where status_code >= 500" })

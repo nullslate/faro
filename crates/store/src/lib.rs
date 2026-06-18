@@ -28,6 +28,16 @@ pub struct Store {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionSummaryCounts {
+    pub requests: usize,
+    pub console_errors: usize,
+    pub replays: usize,
+    pub websocket_frames: usize,
+    pub storage_events: usize,
+    pub cookie_events: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScriptRecord {
     pub id: String,
@@ -175,6 +185,33 @@ impl Store {
         Ok(self
             .conn
             .execute("DELETE FROM sessions WHERE id = ?1", params![id])?)
+    }
+
+    pub fn delete_all_sessions(&self) -> Result<usize> {
+        Ok(self.conn.execute("DELETE FROM sessions", [])?)
+    }
+
+    pub fn session_summary_counts(&self, session_id: &str) -> Result<SessionSummaryCounts> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                (SELECT count(*) FROM requests WHERE session_id = ?1),
+                (SELECT count(*) FROM console_logs WHERE session_id = ?1 AND level IN ('error', 'fatal')),
+                (SELECT count(*) FROM replays WHERE session_id = ?1),
+                (SELECT count(*) FROM websocket_frames WHERE session_id = ?1),
+                (SELECT count(*) FROM storage_events WHERE session_id = ?1),
+                (SELECT count(*) FROM cookie_events WHERE session_id = ?1)",
+        )?;
+        let counts = stmt.query_row(params![session_id], |row| {
+            Ok(SessionSummaryCounts {
+                requests: sqlite_count_to_usize(row.get::<_, i64>(0)?),
+                console_errors: sqlite_count_to_usize(row.get::<_, i64>(1)?),
+                replays: sqlite_count_to_usize(row.get::<_, i64>(2)?),
+                websocket_frames: sqlite_count_to_usize(row.get::<_, i64>(3)?),
+                storage_events: sqlite_count_to_usize(row.get::<_, i64>(4)?),
+                cookie_events: sqlite_count_to_usize(row.get::<_, i64>(5)?),
+            })
+        })?;
+        Ok(counts)
     }
 
     pub fn insert_tab(&self, tab: &Tab) -> Result<()> {
@@ -1069,6 +1106,16 @@ fn sql_value_to_string(value: ValueRef<'_>) -> String {
     }
 }
 
+fn sqlite_count_to_usize(value: i64) -> usize {
+    if value <= 0 {
+        return 0;
+    }
+    match usize::try_from(value) {
+        Ok(value) => value,
+        Err(_) => usize::MAX,
+    }
+}
+
 fn first_sql_keyword(sql: &str) -> Option<String> {
     let keyword = sql
         .chars()
@@ -1455,20 +1502,33 @@ mod tests {
             Some("http://localhost:3000/main.js".to_string()),
             Some(42),
         );
+        let error_log = ConsoleLog::new(
+            session.id.clone(),
+            Some(tab.id.clone()),
+            Some(run.id.clone()),
+            ConsoleLevel::Error,
+            "boom".to_string(),
+            Some("http://localhost:3000/main.js".to_string()),
+            Some(50),
+        );
         let event = console_event(&log);
 
         store.insert_session(&session)?;
         store.insert_tab(&tab)?;
         store.insert_run(&run)?;
         store.insert_console_log(&log)?;
+        store.insert_console_log(&error_log)?;
         store.append_event(&event)?;
 
         assert!(store.session_exists(&session.id)?);
         assert_eq!(store.event_count()?, 1);
 
         let logs = store.console_logs_for_session(&session.id)?;
-        assert_eq!(logs.len(), 1);
-        assert_eq!(logs[0].message, "hello from localhost");
+        assert_eq!(logs.len(), 2);
+        assert!(logs.iter().any(|log| log.message == "hello from localhost"));
+        let counts = store.session_summary_counts(&session.id)?;
+        assert_eq!(counts.requests, 0);
+        assert_eq!(counts.console_errors, 1);
         Ok(())
     }
 
@@ -1500,6 +1560,29 @@ mod tests {
         assert_eq!(store.delete_session(&session.id)?, 1);
         assert!(!store.session_exists(&session.id)?);
         assert!(store.requests_for_session(&session.id)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn deletes_all_sessions_and_cascades_children() -> TestResult {
+        let store = Store::open_memory()?;
+        let first = Session::new(None, Some("http://localhost:3000".to_string()));
+        let second = Session::new(None, Some("http://localhost:4000".to_string()));
+        let request = RequestRecord::started(
+            first.id.clone(),
+            None,
+            None,
+            "GET",
+            "http://localhost:3000/api",
+        );
+
+        store.insert_session(&first)?;
+        store.insert_session(&second)?;
+        store.insert_request(&request)?;
+
+        assert_eq!(store.delete_all_sessions()?, 2);
+        assert!(store.sessions()?.is_empty());
+        assert!(store.requests_for_session(&first.id)?.is_empty());
         Ok(())
     }
 

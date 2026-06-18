@@ -20,7 +20,8 @@ Faro does not embed Chromium and does not render web pages in the terminal. It c
 - Console logs, page errors, and JavaScript scratch evaluation through `$EDITOR`.
 - Storage and cookies views with captured snapshots and live mutation events.
 - Copy any captured request as a full `curl` command.
-- Replay captured requests with `curl` and persist replay status/body metadata.
+- Replay captured requests with `curl`, persist replay status/body metadata, and review replay history in the request detail pane.
+- Copy a redacted Markdown share bundle for a selected request when you need to send context to another person or agent.
 - Read-only SQL editor in the TUI, plus CLI/MCP read-only SQL for agents.
 - Agent-friendly CLI and MCP server for capture, inspection, replay, and SQL.
 - TOML config in the platform config directory, with relative DB paths resolved there.
@@ -125,6 +126,12 @@ c       clear request filter
 
 The sessions manager lets you switch between captured sessions and delete old sessions from the database. Press `S`, move with `j/k`, press `enter` to open a session, or `x` to delete the selected session.
 
+Useful palette commands:
+
+- `Copy Share Bundle`: copy a redacted Markdown request summary with headers, body previews, and replay history.
+- `Sessions: Browse`: switch between or delete captured sessions with request/error/replay/storage counts.
+- `Debug: Toggle Perf`: show frame, poll, capture, replay, and detail-load timing while tuning performance.
+
 Request filters support plain text, structured fields, and case-insensitive regex patterns:
 
 ```text
@@ -176,6 +183,7 @@ Inspect browser state:
 faro console errors --json
 faro storage get localStorage auth --json
 faro cookies list --json
+faro sessions list --json
 ```
 
 Replay and query:
@@ -183,6 +191,12 @@ Replay and query:
 ```sh
 faro replay <request-id> --json
 faro sql "select * from requests where status_code >= 500" --json
+```
+
+Clear captured sessions and their cascaded request/console/storage/cookie/replay rows:
+
+```sh
+faro sessions nuke --yes
 ```
 
 Route filters accept:
@@ -230,11 +244,12 @@ Most users should point their agent at the default config database. Use an expli
 ### Typical Agent Workflow
 
 1. Start Faro normally while reproducing the issue, or let the agent run `capture_url`.
-2. Ask the agent to list failing or slow requests with `list_requests`.
-3. Have it inspect a request with `get_request` and `get_response_body`.
-4. Let it check console failures with `list_console_errors`.
-5. Use `copy_request_as_curl` or `replay_request` when the bug needs a reproducible backend call.
-6. Use `run_readonly_sql` for deeper analysis across the capture database.
+2. Have the agent call `list_sessions` and pick the right `session_id` when more than one capture exists.
+3. Ask the agent to list failing or slow requests with `list_requests`.
+4. Have it inspect a request with `get_request` and `get_response_body`.
+5. Let it check console failures with `list_console_errors`.
+6. Use `copy_request_as_curl` or `replay_request` when the bug needs a reproducible backend call.
+7. Use `run_readonly_sql` for deeper analysis across the capture database.
 
 Useful prompts:
 
@@ -255,12 +270,15 @@ Use Faro read-only SQL to group captured requests by domain and status code. Hig
 | Tool | Purpose |
 | --- | --- |
 | `capture_url` | Launch or attach to Chromium and capture a URL for a bounded duration. |
-| `list_requests` | List captured requests, with route/filter support for narrowing results. |
+| `list_sessions` | List capture sessions with request/error/replay/storage counts. |
+| `delete_all_sessions` | Delete all sessions and cascaded captured data; requires `confirm: true`. |
+| `list_requests` | List captured requests, with route/filter support for narrowing results. Accepts optional `session_id`. |
 | `get_request` | Fetch request metadata, headers, response metadata, and body references. |
 | `get_response_body` | Load a captured response body by request id. |
-| `list_console_errors` | Return captured browser console errors. |
+| `list_console_errors` | Return captured browser console errors. Accepts optional `session_id`. |
+| `list_storage_items` | List current localStorage/sessionStorage items. Accepts optional `session_id` and filters. |
 | `get_storage_item` | Read a current localStorage or sessionStorage item. |
-| `list_cookies` | List current captured cookies. |
+| `list_cookies` | List current captured cookies. Accepts optional `session_id`. |
 | `copy_request_as_curl` | Return a full `curl` command for a captured request. |
 | `replay_request` | Replay a captured request and persist replay metadata. |
 | `run_readonly_sql` | Run guarded read-only SQL against the Faro SQLite database. |

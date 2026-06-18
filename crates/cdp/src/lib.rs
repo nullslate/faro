@@ -388,22 +388,6 @@ pub async fn capture_url(
     let db_path = options.db_path;
     let url = options.url;
     let store = Store::open(&db_path)?;
-    let session = Session::new(Some("CDP session".to_string()), Some(url.clone()));
-    let tab = Tab::new(session.id.clone(), Some(url.clone()));
-    let run = Run::new(
-        session.id.clone(),
-        tab.id.clone(),
-        url.clone(),
-        RunTrigger::InitialLoad,
-    );
-    store.insert_session(&session)?;
-    store.insert_tab(&tab)?;
-    store.insert_run(&run)?;
-    let _ = updates.send(CaptureUpdate::SessionStarted {
-        session_id: session.id.clone(),
-        url: url.clone(),
-    });
-    let _ = updates.send(CaptureUpdate::StoreChanged);
     let _ = updates.send(CaptureUpdate::Status(if options.attach_port.is_some() {
         "attaching to browser".to_string()
     } else {
@@ -430,6 +414,23 @@ pub async fn capture_url(
         websocket_url: target.websocket_url.clone(),
     });
     let _ = updates.send(CaptureUpdate::Status(format!("attached {}", target.url)));
+
+    let session = Session::new(Some("CDP session".to_string()), Some(url.clone()));
+    let tab = Tab::new(session.id.clone(), Some(target.url.clone()));
+    let run = Run::new(
+        session.id.clone(),
+        tab.id.clone(),
+        url.clone(),
+        RunTrigger::InitialLoad,
+    );
+    store.insert_session(&session)?;
+    store.insert_tab(&tab)?;
+    store.insert_run(&run)?;
+    let _ = updates.send(CaptureUpdate::SessionStarted {
+        session_id: session.id.clone(),
+        url: url.clone(),
+    });
+    let _ = updates.send(CaptureUpdate::StoreChanged);
 
     let (mut ws, _) = connect_async(&target.websocket_url).await?;
     let mut next_id = 1_i64;
