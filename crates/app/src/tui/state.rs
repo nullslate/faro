@@ -67,6 +67,7 @@ pub(crate) struct WorkbenchState {
     pub(crate) sort_mode: SortMode,
     pub(crate) sort_descending: bool,
     pub(crate) detail_scroll: u16,
+    pub(crate) selected_replay_index: usize,
     pub(crate) body_scroll: u16,
     pub(crate) body_tree_selected: usize,
     pub(crate) body_tree_selected_key: Option<String>,
@@ -246,6 +247,7 @@ impl WorkbenchState {
             sort_mode: SortMode::Started,
             sort_descending: false,
             detail_scroll: 0,
+            selected_replay_index: usize::MAX,
             body_scroll: 0,
             body_tree_selected: 0,
             body_tree_selected_key: None,
@@ -676,10 +678,25 @@ impl WorkbenchState {
             .and_then(|index| self.requests.get(index))
     }
 
+    pub(crate) fn selected_replay(&self) -> Option<&ReplayView> {
+        let request = self.selected_request()?;
+        let index = self.selected_replay_display_index()?;
+        request.replays.get(index)
+    }
+
+    pub(crate) fn selected_replay_display_index(&self) -> Option<usize> {
+        let request = self.selected_request()?;
+        (!request.replays.is_empty()).then(|| {
+            self.selected_replay_index
+                .min(request.replays.len().saturating_sub(1))
+        })
+    }
+
     pub(crate) fn select_request_position(&mut self, position: usize) {
         if position < self.filtered_request_rows.len() {
             self.table_state.select(Some(position));
             self.reset_request_view_scroll();
+            self.sync_selected_replay_index();
             self.hydrate_selected_request_for_active_detail();
         }
     }
@@ -774,6 +791,7 @@ impl WorkbenchState {
     pub(crate) fn set_focus(&mut self, focus: FocusPane) {
         self.focus = match self.view {
             WorkbenchView::Network => match focus {
+                FocusPane::Body if self.detail_tab == DetailTab::Replay => FocusPane::Detail,
                 FocusPane::Requests | FocusPane::Detail | FocusPane::Body => focus,
                 _ => FocusPane::Requests,
             },
@@ -788,6 +806,7 @@ impl WorkbenchState {
     pub(crate) fn next(&mut self) {
         match self.focus {
             FocusPane::Requests => self.next_request(),
+            FocusPane::Detail if self.detail_tab == DetailTab::Replay => self.next_replay(),
             FocusPane::Detail => self.scroll_down(),
             FocusPane::Body if self.has_body_tree() => self.next_body_tree_node(),
             FocusPane::Body => self.scroll_down(),
@@ -802,6 +821,7 @@ impl WorkbenchState {
     pub(crate) fn previous(&mut self) {
         match self.focus {
             FocusPane::Requests => self.previous_request(),
+            FocusPane::Detail if self.detail_tab == DetailTab::Replay => self.previous_replay(),
             FocusPane::Detail => self.scroll_up(),
             FocusPane::Body if self.has_body_tree() => self.previous_body_tree_node(),
             FocusPane::Body => self.scroll_up(),
@@ -813,10 +833,40 @@ impl WorkbenchState {
         }
     }
 
+    pub(crate) fn next_replay(&mut self) {
+        let Some(replay_count) = self.selected_request().map(|request| request.replays.len())
+        else {
+            return;
+        };
+        if replay_count == 0 {
+            self.selected_replay_index = 0;
+            return;
+        }
+        self.selected_replay_index = self
+            .selected_replay_index
+            .saturating_add(1)
+            .min(replay_count.saturating_sub(1));
+        self.detail_scroll = 0;
+    }
+
+    pub(crate) fn previous_replay(&mut self) {
+        if self
+            .selected_request()
+            .map(|request| request.replays.is_empty())
+            .unwrap_or(true)
+        {
+            self.selected_replay_index = 0;
+            return;
+        }
+        self.selected_replay_index = self.selected_replay_index.saturating_sub(1);
+        self.detail_scroll = 0;
+    }
+
     pub(crate) fn next_focus(&mut self) {
         self.focus = match self.view {
             WorkbenchView::Network => match self.focus {
                 FocusPane::Requests => FocusPane::Detail,
+                FocusPane::Detail if self.detail_tab == DetailTab::Replay => FocusPane::Requests,
                 FocusPane::Detail => FocusPane::Body,
                 _ => FocusPane::Requests,
             },
@@ -832,12 +882,18 @@ impl WorkbenchState {
     pub(crate) fn next_tab(&mut self) {
         self.detail_tab = self.detail_tab.next();
         self.detail_scroll = 0;
+        if self.detail_tab == DetailTab::Replay && self.focus == FocusPane::Body {
+            self.focus = FocusPane::Detail;
+        }
         self.hydrate_selected_request_for_active_detail();
     }
 
     pub(crate) fn previous_tab(&mut self) {
         self.detail_tab = self.detail_tab.previous();
         self.detail_scroll = 0;
+        if self.detail_tab == DetailTab::Replay && self.focus == FocusPane::Body {
+            self.focus = FocusPane::Detail;
+        }
         self.hydrate_selected_request_for_active_detail();
     }
 
@@ -1110,6 +1166,7 @@ impl WorkbenchState {
         };
         self.table_state.select(Some(next));
         self.reset_request_view_scroll();
+        self.sync_selected_replay_index();
         self.hydrate_selected_request_for_active_detail();
     }
 
@@ -1123,6 +1180,7 @@ impl WorkbenchState {
         };
         self.table_state.select(Some(previous));
         self.reset_request_view_scroll();
+        self.sync_selected_replay_index();
         self.hydrate_selected_request_for_active_detail();
     }
 
@@ -1495,13 +1553,10 @@ impl WorkbenchState {
         request.replays = store
             .replays_for_request(request_id)?
             .into_iter()
-            .map(|record| {
-                let body = body_text_for_ref(&store, record.response_body_ref.as_deref())
-                    .with_context(|| format!("load replay body for {}", record.id))?;
-                anyhow::Ok(ReplayView { record, body })
-            })
+            .map(|record| replay_view_for_record(&store, record))
             .collect::<anyhow::Result<Vec<_>>>()?;
         request.details_loaded = true;
+        self.sync_selected_replay_index();
         Ok(())
     }
 
@@ -1523,6 +1578,7 @@ impl WorkbenchState {
         request.response_body = response_body;
         request.replays = replays;
         request.details_loaded = true;
+        self.sync_selected_replay_index();
     }
 
     fn load_request_details(
@@ -1550,13 +1606,10 @@ impl WorkbenchState {
         request.replays = store
             .replays_for_request(request_id)?
             .into_iter()
-            .map(|record| {
-                let body = body_text_for_ref(&store, record.response_body_ref.as_deref())
-                    .with_context(|| format!("load replay body for {}", record.id))?;
-                anyhow::Ok(ReplayView { record, body })
-            })
+            .map(|record| replay_view_for_record(&store, record))
             .collect::<anyhow::Result<Vec<_>>>()?;
         request.details_loaded = true;
+        self.sync_selected_replay_index();
         Ok(())
     }
 
@@ -1752,10 +1805,26 @@ impl WorkbenchState {
 
     fn reset_request_view_scroll(&mut self) {
         self.detail_scroll = 0;
+        self.selected_replay_index = usize::MAX;
         self.body_scroll = 0;
         self.body_tree_selected = 0;
         self.body_tree_selected_key = None;
         self.collapsed_body_nodes.clear();
+    }
+
+    fn sync_selected_replay_index(&mut self) {
+        let Some(replay_count) = self.selected_request().map(|request| request.replays.len())
+        else {
+            self.selected_replay_index = 0;
+            return;
+        };
+        if replay_count == 0 {
+            self.selected_replay_index = 0;
+            return;
+        }
+        self.selected_replay_index = self
+            .selected_replay_index
+            .min(replay_count.saturating_sub(1));
     }
 
     pub(crate) fn toggle_selected_body_tree_node(&mut self) {
@@ -1867,16 +1936,10 @@ impl WorkbenchState {
                 .max(1),
             (DetailTab::Timing, Some(_)) => 6,
             (DetailTab::Replay, Some(request)) => {
-                let body_lines = request
-                    .replays
-                    .last()
-                    .and_then(|replay| replay.body.as_deref())
-                    .map(|body| body.lines().count().min(60))
-                    .unwrap_or(1);
                 if request.replays.is_empty() {
                     3
                 } else {
-                    13 + request.replays.len().min(8) + body_lines
+                    8 + request.replays.len().min(12)
                 }
             }
         };
@@ -1933,6 +1996,15 @@ impl WorkbenchState {
     }
 
     pub(crate) fn copy_body_text(&self) -> Option<String> {
+        if self.focus == FocusPane::Detail
+            && self.detail_tab == DetailTab::Replay
+            && let Some(replay) = self.selected_replay()
+        {
+            return replay
+                .body
+                .clone()
+                .or_else(|| Some(format_replay_record(replay)));
+        }
         if self.focus == FocusPane::Body {
             let items = self.body_tree_items();
             if let Some(item) = items.get(self.body_tree_selected) {
@@ -1973,11 +2045,21 @@ impl WorkbenchState {
         Some(text)
     }
 
-    pub(crate) fn latest_replay_diff_bodies(&self) -> Option<(String, String)> {
+    pub(crate) fn selected_replay_diff_bodies(&self) -> Option<(String, String)> {
         let request = self.selected_request()?;
         let original = formatted_response_body(request);
-        let replay = request.replays.last()?.body.clone().unwrap_or_default();
+        let replay = self.selected_replay()?.body.clone().unwrap_or_default();
         Some((original, replay))
+    }
+
+    pub(crate) fn selected_replay_export_text(&self) -> Option<String> {
+        let replay = self.selected_replay()?;
+        let mut text = format_replay_record(replay);
+        if let Some(body) = replay.body.as_deref() {
+            text.push_str("\n--- response body ---\n");
+            text.push_str(body);
+        }
+        Some(text)
     }
 
     pub(crate) fn selected_response_body_for_editor(&self) -> Option<(String, String)> {
@@ -2019,6 +2101,15 @@ pub(crate) fn body_text_for_ref(
         .map(|body| body.as_text())
         .transpose()
         .with_context(|| format!("decode body {body_id} as utf-8"))
+}
+
+pub(crate) fn replay_view_for_record(
+    store: &Store,
+    record: ReplayRecord,
+) -> anyhow::Result<ReplayView> {
+    let body = body_text_for_ref(store, record.response_body_ref.as_deref())
+        .with_context(|| format!("load replay body for {}", record.id))?;
+    Ok(ReplayView { record, body })
 }
 
 fn websocket_frame_matches(frame: &WebSocketFrameRecord, filter: &str) -> bool {
@@ -3483,6 +3574,40 @@ pub(crate) fn formatted_request_body(request: &RequestView) -> String {
     } else {
         body.to_string()
     }
+}
+
+fn format_replay_record(replay: &ReplayView) -> String {
+    let mut text = String::new();
+    text.push_str(&format!("replay_id: {}\n", replay.record.id));
+    text.push_str(&format!(
+        "source_request_id: {}\n",
+        replay.record.source_request_id
+    ));
+    text.push_str(&format!("timestamp: {}\n", replay.record.ts));
+    text.push_str(&format!(
+        "status: {}\n",
+        replay
+            .record
+            .status_code
+            .map(|status| status.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    ));
+    text.push_str(&format!(
+        "exit: {}\n",
+        replay
+            .record
+            .exit_code
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "-".to_string())
+    ));
+    if let Some(error) = replay.record.error.as_deref() {
+        text.push_str(&format!("error: {error}\n"));
+    }
+    text.push_str(&format!("command: {}\n", replay.record.command));
+    if let Some(output_path) = replay.record.output_path.as_deref() {
+        text.push_str(&format!("output_path: {output_path}\n"));
+    }
+    text
 }
 
 fn looks_like_json(mime_type: Option<&str>, body: &str) -> bool {

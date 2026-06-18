@@ -1,4 +1,6 @@
-use super::state::{FocusPane, InputMode, PaletteCommand, WorkbenchState, WorkbenchView};
+use super::state::{
+    DetailTab, FocusPane, InputMode, PaletteCommand, WorkbenchState, WorkbenchView,
+};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,6 +292,13 @@ fn handle_normal_key(app: &mut WorkbenchState, key: KeyEvent) -> InputOutcome {
         KeyCode::Char('R') => InputOutcome::EditReplay,
         KeyCode::Char('D') if app.view == WorkbenchView::Scripts => InputOutcome::DuplicateScript,
         KeyCode::Char('D') => InputOutcome::DiffReplay,
+        KeyCode::Char('d')
+            if app.view == WorkbenchView::Network
+                && app.focus == FocusPane::Detail
+                && app.detail_tab == DetailTab::Replay =>
+        {
+            InputOutcome::DiffReplay
+        }
         KeyCode::Char('x') if app.view == WorkbenchView::Scripts => InputOutcome::DeleteScript,
         KeyCode::Char('s') => {
             app.next_sort_mode();

@@ -121,6 +121,12 @@ fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut Workben
         ])
         .split(content_area);
 
+    render_requests(frame, body[0], app);
+    if app.detail_tab == DetailTab::Replay {
+        render_replay_workspace(frame, body[1], app);
+        return;
+    }
+
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -129,7 +135,6 @@ fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut Workben
         ])
         .split(body[1]);
 
-    render_requests(frame, body[0], app);
     render_detail(frame, right[0], app);
     render_body(frame, right[1], app);
 }
@@ -137,7 +142,13 @@ fn render_network_view(frame: &mut ratatui::Frame, area: Rect, app: &mut Workben
 fn render_focused_layout(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
     match app.focus {
         FocusPane::Requests => render_requests(frame, area, app),
+        FocusPane::Detail if app.detail_tab == DetailTab::Replay => {
+            render_replay_workspace(frame, area, app)
+        }
         FocusPane::Detail => render_detail(frame, area, app),
+        FocusPane::Body if app.detail_tab == DetailTab::Replay => {
+            render_replay_workspace(frame, area, app)
+        }
         FocusPane::Body => render_body(frame, area, app),
         FocusPane::Console => render_console(frame, area, app),
         FocusPane::WebSockets => render_websockets(frame, area, app),
@@ -663,11 +674,11 @@ fn visible_request_table_state(app: &WorkbenchState, visible_rows: usize) -> Tab
 }
 
 fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let lines = detail_lines(app);
     let block = themed_panel_block(
         detail_title(app),
         Some('D'),
-        app.focus == FocusPane::Detail,
+        app.focus == FocusPane::Detail
+            || (app.detail_tab == DetailTab::Replay && app.focus == FocusPane::Body),
         &app.config.theme,
     );
     let inner = block.inner(area);
@@ -684,11 +695,43 @@ fn render_detail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
         chunks[0],
     );
 
+    let lines = detail_lines(app, chunks[1].width);
     let paragraph = Paragraph::new(lines)
         .style(Style::default().fg(app.config.theme.text))
         .scroll((app.detail_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, chunks[1]);
+}
+
+fn render_replay_workspace(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
+    let block = themed_panel_block(
+        detail_title(app),
+        Some('D'),
+        app.focus == FocusPane::Detail || app.focus == FocusPane::Body,
+        &app.config.theme,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let tab_lines = detail_tab_lines(app, inner.width);
+    let tab_height = tab_lines.len().max(1) as u16;
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(tab_height), Constraint::Min(1)])
+        .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(tab_lines).style(Style::default().fg(app.config.theme.text)),
+        outer[0],
+    );
+
+    let summary = replay_summary_lines(app, outer[1].width, usize::from(outer[1].height));
+    frame.render_widget(
+        Paragraph::new(summary)
+            .style(Style::default().fg(app.config.theme.text))
+            .wrap(Wrap { trim: true }),
+        outer[1],
+    );
 }
 
 fn render_body(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
@@ -3526,6 +3569,7 @@ mod tests {
             sort_mode: SortMode::Started,
             sort_descending: false,
             detail_scroll: 0,
+            selected_replay_index: usize::MAX,
             body_scroll: 0,
             body_tree_selected: 0,
             body_tree_selected_key: None,
@@ -3973,7 +4017,8 @@ mod tests {
     }
 
     #[test]
-    fn replay_lines_show_history_and_latest_body() {
+    fn replay_lines_show_history_and_selected_body() {
+        let mut app = state_with_storage(Vec::new(), Vec::new());
         let mut request = response_request("application/json", "fetch", "https://example.test/api");
         let mut first = ReplayRecord::new(
             "session".to_string(),
@@ -4003,17 +4048,26 @@ mod tests {
                 body: Some(r#"{"ok":true}"#.to_string()),
             },
         ];
+        app.requests.push(request);
+        app.filtered_request_indices = vec![0];
+        app.filtered_request_rows = vec![0];
+        app.table_state.select(Some(0));
+        app.selected_replay_index = 0;
 
-        let text = replay_lines(&request)
+        let Some(selected_request) = app.selected_request() else {
+            panic!("request missing");
+        };
+        let text = replay_lines(&app, selected_request, 100)
             .iter()
             .flat_map(|line| line.spans.iter())
             .map(|span| span.content.as_ref())
             .collect::<String>();
 
         assert!(text.contains("history 2"));
-        assert!(text.contains("recent replays"));
-        assert!(text.contains("latest response body"));
-        assert!(text.contains("\"ok\""));
+        assert!(text.contains("selected 1/2"));
+        assert!(text.contains("replay history"));
+        assert!(text.contains("hidden in replay view"));
+        assert!(!text.contains("\"ok\""));
     }
 
     #[test]
@@ -4138,7 +4192,7 @@ mod tests {
     }
 }
 
-fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
+fn detail_lines(app: &WorkbenchState, width: u16) -> Vec<Line<'static>> {
     let Some(request) = app.selected_request() else {
         return empty_state_lines("no request selected", "capture traffic or move with j/k");
     };
@@ -4170,7 +4224,7 @@ fn detail_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         DetailTab::ResponseBody => response_body_lines(request, app.focus == FocusPane::Detail),
         DetailTab::Timing => timing_lines(request),
         DetailTab::Replay if !request.details_loaded => detail_not_loaded_lines(),
-        DetailTab::Replay => replay_lines(request),
+        DetailTab::Replay => replay_lines(app, request, width),
     }
 }
 
@@ -4632,7 +4686,7 @@ fn timing_lines(request: &RequestView) -> Vec<Line<'static>> {
     ]
 }
 
-fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
+fn replay_lines(app: &WorkbenchState, request: &RequestView, width: u16) -> Vec<Line<'static>> {
     if request.replays.is_empty() {
         return vec![
             Line::styled("No replay captured for this request.", muted_style()),
@@ -4643,22 +4697,35 @@ fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
                 Span::styled("R ", key_style()),
                 Span::raw("edit and replay  "),
                 Span::styled("D ", key_style()),
-                Span::raw("diff latest"),
+                Span::raw("diff selected"),
             ]),
         ];
     };
 
-    let Some(replay) = request.replays.last() else {
+    let selected_index = app
+        .selected_replay_display_index()
+        .unwrap_or_else(|| request.replays.len().saturating_sub(1));
+    let Some(replay) = request.replays.get(selected_index) else {
         return Vec::new();
     };
+    let latest = request.replays.last();
+
+    if width < 54 {
+        return compact_replay_lines(request, replay, selected_index);
+    }
 
     let mut lines = vec![
         Line::from(vec![
             Span::styled("history ", label_style()),
             Span::raw(request.replays.len().to_string()),
             Span::raw("  "),
+            Span::styled("selected ", label_style()),
+            Span::raw(format!("{}/{}", selected_index + 1, request.replays.len())),
+            Span::raw("  "),
             Span::styled("latest ", label_style()),
-            replay_status_span(replay),
+            latest
+                .map(replay_status_span)
+                .unwrap_or_else(|| Span::styled("-", muted_style())),
         ]),
         Line::from(vec![
             Span::styled("r ", key_style()),
@@ -4666,12 +4733,18 @@ fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
             Span::styled("R ", key_style()),
             Span::raw("edit  "),
             Span::styled("D ", key_style()),
-            Span::raw("diff latest  "),
+            Span::raw("diff selected  "),
+            Span::styled("j/k ", key_style()),
+            Span::raw("select replay  "),
+            Span::styled("Y ", key_style()),
+            Span::raw("copy body  "),
             Span::styled("p ", key_style()),
             Span::raw("palette"),
         ]),
         Line::raw(""),
         labeled_line("replay id", replay.record.id.clone()),
+        labeled_line("source", replay.record.source_request_id.clone()),
+        labeled_line("timestamp", replay.record.ts.to_string()),
         labeled_line(
             "status",
             replay
@@ -4696,6 +4769,14 @@ fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
                 .clone()
                 .unwrap_or_else(|| "-".to_string()),
         ),
+        labeled_line(
+            "body",
+            replay
+                .body
+                .as_deref()
+                .map(|body| format_bytes(body.len() as i64))
+                .unwrap_or_else(|| "-".to_string()),
+        ),
         labeled_line("command", replay.record.command.clone()),
     ];
     if let Some(error) = replay.record.error.as_deref() {
@@ -4703,37 +4784,233 @@ fn replay_lines(request: &RequestView) -> Vec<Line<'static>> {
     }
     lines.extend([
         Line::raw(""),
-        Line::styled("recent replays", label_style()),
+        Line::styled("replay history", label_style()),
         Line::raw(""),
     ]);
 
-    for replay in request.replays.iter().rev().take(8) {
-        lines.push(replay_history_line(replay));
+    for (index, replay) in request.replays.iter().enumerate().rev().take(10) {
+        lines.push(replay_history_line(replay, index == selected_index, false));
     }
 
     lines.extend([
         Line::raw(""),
-        Line::styled("latest response body", label_style()),
-        Line::raw(""),
+        Line::from(vec![
+            Span::styled("body ", label_style()),
+            Span::raw("hidden in replay view  "),
+            Span::styled("Y ", key_style()),
+            Span::raw("copy  "),
+            Span::styled("w ", key_style()),
+            Span::raw("save  "),
+            Span::styled("D/d ", key_style()),
+            Span::raw("diff"),
+        ]),
     ]);
-
-    if let Some(body) = replay.body.as_deref() {
-        lines.extend(syntax_body_lines(body.to_string()).into_iter().take(60));
-    } else {
-        lines.push(Line::raw("(none)"));
-    }
 
     lines
 }
 
-fn replay_history_line(replay: &ReplayView) -> Line<'static> {
+fn replay_summary_lines(app: &WorkbenchState, width: u16, height: usize) -> Vec<Line<'static>> {
+    let Some(request) = app.selected_request() else {
+        return empty_state_lines("no request selected", "capture traffic or move with j/k");
+    };
+    if request.replays.is_empty() {
+        return replay_lines(app, request, width);
+    }
+
+    let selected_index = app
+        .selected_replay_display_index()
+        .unwrap_or_else(|| request.replays.len().saturating_sub(1));
+    let Some(replay) = request.replays.get(selected_index) else {
+        return Vec::new();
+    };
+
+    let compact = width < 72 || height < 8;
+    let body_len = replay
+        .body
+        .as_deref()
+        .map(|body| format_bytes(body.len() as i64))
+        .unwrap_or_else(|| "-".to_string());
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("selected ", label_style()),
+            Span::raw(format!(
+                "{}/{}  ",
+                selected_index + 1,
+                request.replays.len()
+            )),
+            replay_status_span(replay),
+            Span::raw("  "),
+            Span::styled("exit ", label_style()),
+            Span::raw(
+                replay
+                    .record
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            Span::raw("  "),
+            Span::styled("body ", label_style()),
+            Span::raw(body_len),
+        ]),
+        Line::from(vec![
+            Span::styled("j/k ", key_style()),
+            Span::raw("select  "),
+            Span::styled("D/d ", key_style()),
+            Span::raw("diff  "),
+            Span::styled("Y ", key_style()),
+            Span::raw("copy  "),
+            Span::styled("w ", key_style()),
+            Span::raw("save"),
+        ]),
+    ];
+
+    if !compact {
+        lines.push(Line::from(vec![
+            Span::styled("id ", label_style()),
+            Span::raw(compact_value(&replay.record.id, 18)),
+            Span::raw("  "),
+            Span::styled("ts ", label_style()),
+            Span::raw(replay.record.ts.to_string()),
+            Span::raw("  "),
+            Span::styled("out ", label_style()),
+            Span::raw(
+                replay
+                    .record
+                    .output_path
+                    .as_deref()
+                    .map(|path| compact_value(path, 34))
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+        ]));
+    }
+
+    if let Some(error) = replay.record.error.as_deref() {
+        lines.push(Line::from(vec![
+            Span::styled("error ", warning_style()),
+            Span::raw(compact_value(
+                error,
+                usize::from(width.saturating_sub(8)).max(16),
+            )),
+        ]));
+    }
+
+    let reserved = lines.len().saturating_add(1);
+    let history_take = height.saturating_sub(reserved).clamp(1, 8);
+    lines.push(Line::styled("history", label_style()));
+    for (index, replay) in request.replays.iter().enumerate().rev().take(history_take) {
+        lines.push(replay_history_line(replay, index == selected_index, true));
+    }
+    lines.extend([
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("body ", label_style()),
+            Span::raw("hidden here; use "),
+            Span::styled("Y ", key_style()),
+            Span::raw("copy, "),
+            Span::styled("w ", key_style()),
+            Span::raw("save, "),
+            Span::styled("D/d ", key_style()),
+            Span::raw("diff"),
+        ]),
+    ]);
+    lines
+}
+
+fn compact_replay_lines(
+    request: &RequestView,
+    replay: &ReplayView,
+    selected_index: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("replay ", label_style()),
+            Span::raw(format!("{}/{} ", selected_index + 1, request.replays.len())),
+            replay_status_span(replay),
+            Span::raw("  "),
+            Span::styled("j/k ", key_style()),
+            Span::raw("select"),
+        ]),
+        Line::from(vec![
+            Span::styled("id ", label_style()),
+            Span::raw(compact_value(&replay.record.id, 12)),
+            Span::raw("  "),
+            Span::styled("exit ", label_style()),
+            Span::raw(
+                replay
+                    .record
+                    .exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            Span::raw("  "),
+            Span::styled("body ", label_style()),
+            Span::raw(
+                replay
+                    .body
+                    .as_deref()
+                    .map(|body| format_bytes(body.len() as i64))
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("D ", key_style()),
+            Span::raw("diff  "),
+            Span::styled("Y ", key_style()),
+            Span::raw("copy  "),
+            Span::styled("w ", key_style()),
+            Span::raw("save"),
+        ]),
+        Line::raw(""),
+        Line::styled("history", label_style()),
+    ];
+
+    for (index, replay) in request.replays.iter().enumerate().rev().take(5) {
+        lines.push(replay_history_line(replay, index == selected_index, true));
+    }
+
+    lines.extend([
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("body ", label_style()),
+            Span::raw("hidden here; "),
+            Span::styled("Y ", key_style()),
+            Span::raw("copy  "),
+            Span::styled("w ", key_style()),
+            Span::raw("save  "),
+            Span::styled("D/d ", key_style()),
+            Span::raw("diff"),
+        ]),
+    ]);
+    lines
+}
+
+fn replay_history_line(replay: &ReplayView, selected: bool, compact: bool) -> Line<'static> {
     let body = replay
         .body
         .as_deref()
         .map(|body| format!(" body={}", format_bytes(body.len() as i64)))
         .unwrap_or_default();
+    let marker = if selected { ">" } else { " " };
+    let id_style = if selected {
+        label_style()
+    } else {
+        muted_style()
+    };
+    if compact {
+        return Line::from(vec![
+            Span::styled(marker, key_style()),
+            Span::raw(" "),
+            replay_status_span(replay),
+            Span::raw(" "),
+            Span::styled(compact_value(&replay.record.id, 10), id_style),
+            Span::styled(body, muted_style()),
+        ]);
+    }
+
     Line::from(vec![
-        Span::styled(compact_value(&replay.record.id, 12), muted_style()),
+        Span::styled(marker, key_style()),
+        Span::raw(" "),
+        Span::styled(compact_value(&replay.record.id, 12), id_style),
         Span::raw("  "),
         replay_status_span(replay),
         Span::raw("  exit="),

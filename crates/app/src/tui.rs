@@ -26,8 +26,8 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use render::render;
 use state::{
-    DetailTab, ReplayView, RequestView, WorkbenchState, WorkbenchView, formatted_request_body,
-    formatted_response_body,
+    DetailTab, FocusPane, ReplayView, RequestView, WorkbenchState, WorkbenchView,
+    formatted_request_body, formatted_response_body,
 };
 use std::collections::HashSet;
 use std::env;
@@ -584,6 +584,16 @@ fn save_layout_preference(app: &mut WorkbenchState) {
 
 fn save_selected_exchange(app: &mut WorkbenchState) {
     app.hydrate_selected_request();
+    if app.detail_tab == DetailTab::Replay
+        && app.focus == FocusPane::Detail
+        && let Some(replay) = app.selected_replay_export_text()
+    {
+        match write_temp_file("faro-replay", "txt", &replay) {
+            Ok(path) => app.status = format!("saved replay {}", path.display()),
+            Err(error) => app.status = format!("save replay failed: {error}"),
+        }
+        return;
+    }
     let Some(request) = app.selected_request() else {
         app.status = "no request selected".to_string();
         return;
@@ -1423,7 +1433,7 @@ fn diff_selected_replay(
     app: &mut WorkbenchState,
 ) -> anyhow::Result<()> {
     app.hydrate_selected_request();
-    let Some((original, replay)) = app.latest_replay_diff_bodies() else {
+    let Some((original, replay)) = app.selected_replay_diff_bodies() else {
         app.status = "no replay body to diff".to_string();
         return Ok(());
     };
@@ -1442,11 +1452,18 @@ fn diff_selected_replay(
             ])
             .status();
         resume_terminal_after_editor(terminal).context("restore terminal after nvim diff")?;
-        app.status = match status {
-            Ok(status) => format!("diff viewed in nvim ({status})"),
-            Err(error) => format!("nvim diff failed: {error}"),
-        };
-        return Ok(());
+        match status {
+            Ok(status) if status.success() => {
+                app.status = format!("diff viewed in nvim ({status})");
+                return Ok(());
+            }
+            Ok(status) => {
+                app.status = format!("nvim diff exited {status}; writing unified diff");
+            }
+            Err(error) => {
+                app.status = format!("nvim diff failed: {error}; writing unified diff");
+            }
+        }
     }
 
     let diff = if command_exists("diff") {
@@ -1864,7 +1881,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn copy_to_clipboard(text: &str) -> anyhow::Result<&'static str> {
-    for tool in ["wl-copy", "xclip", "xsel"] {
+    for tool in ["pbcopy", "wl-copy", "xclip", "xsel"] {
         if command_exists(tool) {
             let mut child = match tool {
                 "xclip" => Command::new(tool)
@@ -1888,7 +1905,7 @@ fn copy_to_clipboard(text: &str) -> anyhow::Result<&'static str> {
             }
         }
     }
-    anyhow::bail!("wl-copy/xclip/xsel not found or failed")
+    anyhow::bail!("pbcopy/wl-copy/xclip/xsel not found or failed")
 }
 
 fn parse_http_status(output: &[u8]) -> Option<i64> {
@@ -2080,11 +2097,7 @@ fn run_detail_load_task(task: DetailLoadTask) -> anyhow::Result<DetailLoadResult
     let replays = store
         .replays_for_request(&task.request_id)?
         .into_iter()
-        .map(|record| {
-            let body = state::body_text_for_ref(&store, record.response_body_ref.as_deref())
-                .with_context(|| format!("load replay body for {}", record.id))?;
-            anyhow::Ok(ReplayView { record, body })
-        })
+        .map(|record| state::replay_view_for_record(&store, record))
         .collect::<anyhow::Result<Vec<_>>>()?;
     Ok(DetailLoadResult {
         request_body,
