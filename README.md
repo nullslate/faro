@@ -271,16 +271,22 @@ Use Faro read-only SQL to group captured requests by domain and status code. Hig
 | --- | --- |
 | `capture_url` | Launch or attach to Chromium and capture a URL for a bounded duration. |
 | `list_sessions` | List capture sessions with request/error/replay/storage counts. |
+| `get_session` | Get one capture session and summary counts. |
 | `delete_all_sessions` | Delete all sessions and cascaded captured data; requires `confirm: true`. |
 | `list_requests` | List captured requests, with route/filter support for narrowing results. Accepts optional `session_id`. |
 | `get_request` | Fetch request metadata, headers, response metadata, and body references. |
 | `get_response_body` | Load a captured response body by request id. |
+| `list_replays` | List replay records by session or request. |
+| `get_replay` | Get one replay record and optionally its stored body. |
+| `list_websocket_frames` | List captured WebSocket frames with direction/opcode filters. |
 | `list_console_errors` | Return captured browser console errors. Accepts optional `session_id`. |
 | `list_storage_items` | List current localStorage/sessionStorage items. Accepts optional `session_id` and filters. |
 | `get_storage_item` | Read a current localStorage or sessionStorage item. |
 | `list_cookies` | List current captured cookies. Accepts optional `session_id`. |
 | `copy_request_as_curl` | Return a full `curl` command for a captured request. |
 | `replay_request` | Replay a captured request and persist replay metadata. |
+| `evaluate_js` | Evaluate JavaScript through a CDP websocket URL returned by `capture_url`. |
+| `reload_page` | Reload the attached page through a CDP websocket URL returned by `capture_url`. |
 | `run_readonly_sql` | Run guarded read-only SQL against the Faro SQLite database. |
 
 The same workflows are available from the CLI when an agent cannot use MCP:
@@ -375,13 +381,17 @@ cargo run -- capture http://localhost:5173 --for 10s --json
 cargo run -- --db /tmp/faro.db mcp
 ```
 
+## Next Up
+
+Replay polish is next: selectable replay history, compare-any replay diffs, replay response metadata, and copy/export actions for replay results.
+
 ## Current Limitations
 
 - Faro currently targets Chromium-family browsers through CDP.
 - Response body capture is bounded to avoid unbounded database growth.
 - Storage mutation tracking is CDP DOMStorage-based; snapshots are used for baseline and reconciliation.
 - Cookie mutation tracking uses HTTP `Set-Cookie` observation plus a page-side `document.cookie` observer.
-- MCP support is intentionally narrow and DB-first; live page evaluation is still CLI/TUI-oriented.
+- MCP browser operations require an attached CDP websocket URL from `capture_url`; database inspection works offline.
 
 ## License
 

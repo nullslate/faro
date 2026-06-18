@@ -85,16 +85,22 @@ fn call_tool(options: &CliOptions, params: &Value) -> anyhow::Result<Value> {
     let result = match name {
         "capture_url" => capture_url_tool(options, args),
         "list_sessions" => list_sessions_tool(&options.db_path),
+        "get_session" => get_session_tool(&options.db_path, args),
         "delete_all_sessions" => delete_all_sessions_tool(&options.db_path, args),
         "list_requests" => list_requests_tool(&options.db_path, args),
         "get_request" => get_request_tool(&options.db_path, args),
         "get_response_body" => get_response_body_tool(&options.db_path, args),
+        "list_replays" => list_replays_tool(&options.db_path, args),
+        "get_replay" => get_replay_tool(&options.db_path, args),
+        "list_websocket_frames" => list_websocket_frames_tool(&options.db_path, args),
         "list_console_errors" => list_console_errors_tool(&options.db_path, args),
         "list_storage_items" => list_storage_items_tool(&options.db_path, args),
         "get_storage_item" => get_storage_item_tool(&options.db_path, args),
         "list_cookies" => list_cookies_tool(&options.db_path, args),
         "copy_request_as_curl" => copy_request_as_curl_tool(&options.db_path, args),
         "replay_request" => replay_request_tool(&options.db_path, args),
+        "evaluate_js" => evaluate_js_tool(args),
+        "reload_page" => reload_page_tool(args),
         "run_readonly_sql" => run_readonly_sql_tool(&options.db_path, args),
         _ => bail!("unknown tool `{name}`"),
     }?;
@@ -199,6 +205,25 @@ fn list_sessions_tool(db_path: &Path) -> anyhow::Result<Value> {
     Ok(json!({ "sessions": sessions }))
 }
 
+fn get_session_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
+    let store = open_store(&db_path.to_path_buf())?;
+    let session = resolve_session(&store, args)?;
+    let counts = store
+        .session_summary_counts(&session.id)
+        .with_context(|| format!("load session summary for {}", session.id))?;
+    Ok(json!({
+        "session": session,
+        "counts": {
+            "requests": counts.requests,
+            "errors": counts.console_errors,
+            "replays": counts.replays,
+            "websocket_frames": counts.websocket_frames,
+            "storage_events": counts.storage_events,
+            "cookie_events": counts.cookie_events
+        }
+    }))
+}
+
 fn delete_all_sessions_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let confirm = args
         .get("confirm")
@@ -252,6 +277,84 @@ fn get_response_body_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value>
             .and_then(|response| response.body_ref.as_deref()),
     )?;
     Ok(json!({ "request_id": request_id, "body": body }))
+}
+
+fn list_replays_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
+    let store = open_store(&db_path.to_path_buf())?;
+    let request_id = optional_string(args, "request_id");
+    let session = if request_id.is_none() {
+        Some(resolve_session(&store, args)?)
+    } else {
+        None
+    };
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value.min(500) as usize)
+        .unwrap_or(100);
+    let replays = if let Some(request_id) = request_id {
+        store
+            .replays_for_request(&request_id)
+            .with_context(|| format!("load replays for request {request_id}"))?
+    } else {
+        let Some(session) = session.as_ref() else {
+            bail!("missing resolved session");
+        };
+        store
+            .replays_for_session(&session.id)
+            .with_context(|| format!("load replays for session {}", session.id))?
+    }
+    .into_iter()
+    .rev()
+    .take(limit)
+    .collect::<Vec<_>>();
+    Ok(json!({
+        "session_id": session.as_ref().map(|session| session.id.clone()),
+        "replays": replays
+    }))
+}
+
+fn get_replay_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
+    let replay_id = required_string(args, "replay_id")?;
+    let include_body = args
+        .get("include_body")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let store = open_store(&db_path.to_path_buf())?;
+    let replay = find_replay(&store, &replay_id)?;
+    let body = if include_body {
+        load_body(&store, replay.response_body_ref.as_deref())?
+    } else {
+        None
+    };
+    Ok(json!({ "replay": replay, "body": body }))
+}
+
+fn list_websocket_frames_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
+    let store = open_store(&db_path.to_path_buf())?;
+    let session = resolve_session(&store, args)?;
+    let direction = optional_string(args, "direction").map(|value| value.to_lowercase());
+    let opcode = args.get("opcode").and_then(Value::as_i64);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .map(|value| value.min(1000) as usize)
+        .unwrap_or(200);
+    let frames = store
+        .websocket_frames_for_session(&session.id)
+        .with_context(|| format!("load websocket frames for session {}", session.id))?
+        .into_iter()
+        .filter(|frame| {
+            direction
+                .as_deref()
+                .map(|direction| frame.direction.as_str() == direction)
+                .unwrap_or(true)
+        })
+        .filter(|frame| opcode.map(|opcode| frame.opcode == opcode).unwrap_or(true))
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>();
+    Ok(json!({ "session_id": session.id, "frames": frames }))
 }
 
 fn list_console_errors_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
@@ -375,6 +478,20 @@ fn replay_request_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     }))
 }
 
+fn evaluate_js_tool(args: &Value) -> anyhow::Result<Value> {
+    let websocket_url = required_string(args, "websocket_url")?;
+    let expression = required_string(args, "expression")?;
+    let result = faro_cdp::evaluate_expression_blocking(&websocket_url, &expression)
+        .context("evaluate JavaScript through CDP")?;
+    Ok(json!({ "result": result }))
+}
+
+fn reload_page_tool(args: &Value) -> anyhow::Result<Value> {
+    let websocket_url = required_string(args, "websocket_url")?;
+    faro_cdp::reload_page_blocking(&websocket_url).context("reload page through CDP")?;
+    Ok(json!({ "reloaded": true }))
+}
+
 fn run_readonly_sql_tool(db_path: &Path, args: &Value) -> anyhow::Result<Value> {
     let query = required_string(args, "query")?;
     let result = faro_store::Store::query_readonly(db_path, &query)
@@ -409,6 +526,20 @@ fn resolve_session(store: &faro_store::Store, args: &Value) -> anyhow::Result<Se
             .with_context(|| format!("session `{session_id}` not found"));
     }
     latest_session(store)?.context("no faro sessions found")
+}
+
+fn find_replay(store: &faro_store::Store, replay_id: &str) -> anyhow::Result<ReplayRecord> {
+    for session in store.sessions().context("load sessions")? {
+        if let Some(replay) = store
+            .replays_for_session(&session.id)
+            .with_context(|| format!("load replays for session {}", session.id))?
+            .into_iter()
+            .find(|replay| replay.id == replay_id)
+        {
+            return Ok(replay);
+        }
+    }
+    bail!("replay `{replay_id}` not found")
 }
 
 fn capture_update_json(update: CaptureUpdate, db_path: &Path) -> Value {
@@ -523,6 +654,18 @@ fn tools() -> Value {
             object_schema(&[], &[])
         ),
         tool(
+            "get_session",
+            "Get one Faro capture session and summary counts. Defaults to latest when session_id is omitted.",
+            object_schema(
+                &[(
+                    "session_id",
+                    "string",
+                    "Optional Faro session id. Omit to use the latest session."
+                )],
+                &[]
+            )
+        ),
+        tool(
             "delete_all_sessions",
             "Delete all Faro sessions and cascaded captured data. Requires confirm=true.",
             object_schema(
@@ -576,6 +719,58 @@ fn tools() -> Value {
             object_schema(
                 &[("request_id", "string", "Faro request id.")],
                 &["request_id"]
+            )
+        ),
+        tool(
+            "list_replays",
+            "List replay records by session or request. Defaults to the latest session.",
+            object_schema(
+                &[
+                    (
+                        "session_id",
+                        "string",
+                        "Optional Faro session id. Ignored when request_id is provided."
+                    ),
+                    ("request_id", "string", "Optional Faro request id."),
+                    ("limit", "number", "Maximum rows to return, capped at 500.")
+                ],
+                &[]
+            )
+        ),
+        tool(
+            "get_replay",
+            "Get one replay record and optionally its captured response body.",
+            object_schema(
+                &[
+                    ("replay_id", "string", "Faro replay id."),
+                    (
+                        "include_body",
+                        "boolean",
+                        "Include stored replay response body text. Defaults to true."
+                    )
+                ],
+                &["replay_id"]
+            )
+        ),
+        tool(
+            "list_websocket_frames",
+            "List captured WebSocket frames for a session. Defaults to the latest session.",
+            object_schema(
+                &[
+                    (
+                        "session_id",
+                        "string",
+                        "Optional Faro session id. Omit to use the latest session."
+                    ),
+                    (
+                        "direction",
+                        "string",
+                        "Optional direction: sent or received."
+                    ),
+                    ("opcode", "number", "Optional WebSocket opcode filter."),
+                    ("limit", "number", "Maximum rows to return, capped at 1000.")
+                ],
+                &[]
             )
         ),
         tool(
@@ -657,6 +852,33 @@ fn tools() -> Value {
             object_schema(
                 &[("request_id", "string", "Faro request id.")],
                 &["request_id"]
+            )
+        ),
+        tool(
+            "evaluate_js",
+            "Evaluate JavaScript through an attached CDP websocket URL returned by capture_url.",
+            object_schema(
+                &[
+                    (
+                        "websocket_url",
+                        "string",
+                        "CDP page websocket URL from a capture_url attached event."
+                    ),
+                    ("expression", "string", "JavaScript expression to evaluate.")
+                ],
+                &["websocket_url", "expression"]
+            )
+        ),
+        tool(
+            "reload_page",
+            "Reload a page through an attached CDP websocket URL returned by capture_url.",
+            object_schema(
+                &[(
+                    "websocket_url",
+                    "string",
+                    "CDP page websocket URL from a capture_url attached event."
+                )],
+                &["websocket_url"]
             )
         ),
         tool(
@@ -747,8 +969,14 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(names.contains(&"list_sessions"));
+        assert!(names.contains(&"get_session"));
         assert!(names.contains(&"delete_all_sessions"));
         assert!(names.contains(&"list_storage_items"));
+        assert!(names.contains(&"list_replays"));
+        assert!(names.contains(&"get_replay"));
+        assert!(names.contains(&"list_websocket_frames"));
+        assert!(names.contains(&"evaluate_js"));
+        assert!(names.contains(&"reload_page"));
         Ok(())
     }
 

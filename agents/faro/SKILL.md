@@ -66,6 +66,7 @@ list_console_errors({ "session_id": "..." })
 list_storage_items({ "session_id": "...", "storage_type": "localStorage", "key_contains": "auth" })
 get_storage_item({ "session_id": "...", "storage_type": "localStorage", "key": "auth" })
 list_cookies({ "session_id": "..." })
+list_websocket_frames({ "session_id": "...", "direction": "received", "limit": 50 })
 ```
 
 6. Reproduce or share requests:
@@ -73,12 +74,21 @@ list_cookies({ "session_id": "..." })
 ```text
 copy_request_as_curl({ "request_id": "..." })
 replay_request({ "request_id": "..." })
+list_replays({ "session_id": "..." })
+get_replay({ "replay_id": "...", "include_body": true })
 ```
 
 7. Use SQL for ad hoc analysis. SQL must be read-only:
 
 ```text
 run_readonly_sql({ "query": "select id, method, url, status_code from requests where status_code >= 500" })
+```
+
+8. When `capture_url` returns an attached `websocket_url`, live page actions are available:
+
+```text
+evaluate_js({ "websocket_url": "...", "expression": "document.title" })
+reload_page({ "websocket_url": "..." })
 ```
 
 ## CLI Fallback
@@ -103,3 +113,4 @@ faro sql "select * from requests where status_code >= 500" --json
 - Prefer `copy_request_as_curl` when sharing a reproduction with a human.
 - Prefer `replay_request` only when the user explicitly wants to send the request again.
 - Do not run mutating SQL. Faro rejects writes, but tools should still ask for read-only queries.
+- Project next up: replay polish, including selectable replay history and compare-any replay diffs.
