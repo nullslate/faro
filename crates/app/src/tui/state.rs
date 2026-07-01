@@ -1,19 +1,22 @@
 use crate::config::AppConfig;
 use crate::query::{
     RequestQueryItem, RequestQueryMeta, RequestQueryOptions, RequestQueryResult,
-    filter_console_indices, filter_websocket_indices, latest_responses_by_request, query_requests,
+    filter_console_indices, filter_depends_on_response, filter_websocket_indices,
+    latest_responses_by_request, query_requests_iter,
 };
 use crate::services::{
     build_curl_args as service_build_curl_args, build_curl_command, session_summary,
 };
+use crate::tui::live_refresh::{LiveRefreshDelta, LiveRefreshRequest};
 use anyhow::Context;
 use faro_core::{
-    ConsoleLog, CookieEventRecord, CookieSnapshotRecord, ReplayRecord, RequestRecord,
+    ConsoleLevel, ConsoleLog, CookieEventRecord, CookieSnapshotRecord, ReplayRecord, RequestRecord,
     ResponseRecord, Session, StorageEventRecord, StorageSnapshotRecord, UnixMillis,
-    WebSocketFrameRecord, now_ms,
+    WebSocketFrameDirection, WebSocketFrameRecord, now_ms,
 };
 use faro_store::{ScriptRecord, Store};
 use ratatui::widgets::{ListState, TableState};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Instant;
@@ -40,15 +43,21 @@ use palette::{
     filter_preset_status, filter_query_for_preset_label, next_filter_preset, palette_matches,
 };
 pub(crate) use palette::{PaletteCommand, PaletteEntry};
+pub(super) use requests::{
+    apply_request_stats_replacement, compute_request_stats, request_stats_contribution,
+};
 use routes::{
-    build_request_tree_metas, group_label, group_path_segment_count, parent_group_key,
-    route_breadcrumb_for_group, route_label_for_group, strip_route_segments,
+    append_request_tree_metas, build_request_tree_metas, descendant_counts_for_metas, group_label,
+    group_path_segment_count, parent_group_key, route_breadcrumb_for_group, route_label_for_group,
+    strip_route_segments,
 };
 pub(crate) use routes::{domain_for_url, path_for_url};
 pub(crate) use types::{
-    BodyTreeItem, CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane, InputMode,
-    LayoutPreset, PerfStats, ReplayView, RequestTreeMeta, RequestView, RouteSummary, SessionView,
-    SortMode, SqlResultsView, WorkbenchView,
+    BodyTreeCache, BodyTreeItem, CapturedFavicon, ConsoleDetailLineCache, ConsoleStats,
+    CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane, InputMode, LayoutPreset,
+    LiveWatermarks, PerfStats, ReplayView, RequestStats, RequestTreeMeta, RequestView,
+    ResponseBodyLineCache, RouteSummary, SessionView, SortMode, SqlResultsView,
+    WebSocketDetailLineCache, WebSocketStats, WorkbenchView,
 };
 
 pub(crate) type ReplayContext = (String, Option<String>, Option<String>, String, String);
@@ -61,10 +70,17 @@ pub(crate) struct WorkbenchState {
     pub(crate) sessions: Vec<SessionView>,
     pub(crate) session_state: ListState,
     pub(crate) requests: Vec<RequestView>,
+    pub(crate) request_indices_by_id: HashMap<String, usize>,
     pub(crate) request_tree_metas: Vec<RequestTreeMeta>,
+    pub(crate) request_route_descendant_counts: HashMap<String, usize>,
     pub(crate) filtered_request_indices: Vec<usize>,
     pub(crate) filtered_request_rows: Vec<usize>,
+    pub(crate) filtered_request_positions_by_id: HashMap<String, usize>,
     pub(crate) filtered_route_descendant_counts: HashMap<String, usize>,
+    pub(crate) request_stats: RequestStats,
+    pub(crate) live_watermarks: LiveWatermarks,
+    pub(crate) live_requests_since_prune: usize,
+    pub(crate) active_route_summary_cache: Option<RouteSummary>,
     pub(crate) collapsed_request_groups: HashSet<String>,
     pub(crate) active_request_route_group: Option<String>,
     pub(crate) sql_request_filter_ids: Option<HashSet<String>>,
@@ -72,11 +88,18 @@ pub(crate) struct WorkbenchState {
     pub(crate) requests_hidden_before: Option<UnixMillis>,
     pub(crate) console_logs: Vec<ConsoleLog>,
     pub(crate) filtered_console_indices: Vec<usize>,
+    pub(crate) filtered_console_positions_by_id: HashMap<String, usize>,
     pub(crate) console_hidden_before: Option<UnixMillis>,
+    pub(crate) console_stats: ConsoleStats,
+    pub(crate) console_detail_line_cache: RefCell<Option<ConsoleDetailLineCache>>,
     pub(crate) websocket_frames: Vec<WebSocketFrameRecord>,
     pub(crate) filtered_websocket_indices: Vec<usize>,
+    pub(crate) filtered_websocket_positions_by_id: HashMap<String, usize>,
     pub(crate) websocket_state: ListState,
     pub(crate) websocket_detail_scroll: u16,
+    pub(crate) websocket_detail_line_cache: RefCell<Option<WebSocketDetailLineCache>>,
+    pub(crate) websocket_stats: WebSocketStats,
+    pub(crate) websocket_connection_ids: HashSet<String>,
     pub(crate) storage_events: Vec<StorageEventRecord>,
     pub(crate) storage_snapshots: Vec<StorageSnapshotRecord>,
     pub(crate) storage_selected: usize,
@@ -101,6 +124,9 @@ pub(crate) struct WorkbenchState {
     pub(crate) body_tree_selected: usize,
     pub(crate) body_tree_selected_key: Option<String>,
     pub(crate) collapsed_body_nodes: HashSet<String>,
+    pub(crate) body_tree_cache: RefCell<Option<BodyTreeCache>>,
+    pub(crate) response_body_line_cache: RefCell<Option<ResponseBodyLineCache>>,
+    pub(crate) captured_favicon_cache: RefCell<Option<Option<CapturedFavicon>>>,
     pub(crate) storage_scroll: u16,
     pub(crate) cookie_scroll: u16,
     pub(crate) input_mode: InputMode,
@@ -171,7 +197,7 @@ fn adjusted_percent(value: u16, delta: i16) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faro_core::Header;
+    use faro_core::{Header, RequestStatus};
 
     type TestResult = anyhow::Result<()>;
 
@@ -205,6 +231,174 @@ mod tests {
             replays: Vec::new(),
             details_loaded: true,
         }
+    }
+
+    fn synthetic_request_view(index: usize) -> RequestView {
+        let method = if index.is_multiple_of(9) {
+            "POST"
+        } else {
+            "GET"
+        };
+        let path = match index % 6 {
+            0 => format!("/api/users/{index}/profile"),
+            1 => format!("/api/organizations/{}/members", index % 400),
+            2 => format!("/assets/vendor-{index:x}.js"),
+            3 => format!("/assets/chunk-{index:x}.css"),
+            4 => "/graphql".to_string(),
+            _ => format!("/events/stream/{}", index % 40),
+        };
+        let mut request = RequestRecord::started(
+            "session".to_string(),
+            Some("tab".to_string()),
+            Some("run".to_string()),
+            method,
+            format!("http://localhost:5173{path}?q={index}"),
+        );
+        request.id = format!("request-{index:06}");
+        request.started_at = index as i64;
+        request.completed_at = Some(index as i64 + (index % 750) as i64);
+        request.status = RequestStatus::Complete;
+        request.resource_type = Some(
+            match index % 6 {
+                0 | 1 => "fetch",
+                2 => "script",
+                3 => "stylesheet",
+                4 => "xhr",
+                _ => "eventsource",
+            }
+            .to_string(),
+        );
+
+        let mut response = ResponseRecord::received(request.id.clone());
+        response.id = format!("response-{index:06}");
+        response.received_at = request.completed_at.unwrap_or(request.started_at);
+        response.status_code = Some(if index.is_multiple_of(97) {
+            500
+        } else if index.is_multiple_of(41) {
+            404
+        } else {
+            200
+        });
+        response.mime_type = Some(
+            match request.resource_type.as_deref() {
+                Some("script") => "application/javascript",
+                Some("stylesheet") => "text/css",
+                Some("eventsource") => "text/event-stream",
+                _ => "application/json",
+            }
+            .to_string(),
+        );
+        response.body_size = Some(((index % 200_000) + 128) as i64);
+
+        RequestView {
+            request,
+            response: Some(response),
+            request_body: None,
+            response_body: None,
+            replays: Vec::new(),
+            details_loaded: false,
+        }
+    }
+
+    fn load_synthetic_state(request_count: usize) -> anyhow::Result<WorkbenchState> {
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.requests = (0..request_count).map(synthetic_request_view).collect();
+        state.request_indices_by_id = state
+            .requests
+            .iter()
+            .enumerate()
+            .map(|(index, request)| (request.request.id.clone(), index))
+            .collect();
+        state.request_tree_metas = build_request_tree_metas(&state.requests);
+        state.request_route_descendant_counts =
+            descendant_counts_for_metas(&state.request_tree_metas);
+        state.request_stats = compute_request_stats(&state.requests);
+        state.apply_filter();
+        Ok(state)
+    }
+
+    fn log_perf(label: &str, elapsed: std::time::Duration, rows: usize) {
+        println!("{label}: {:?} ({rows} rows)", elapsed);
+    }
+
+    #[test]
+    #[ignore = "large-session perf harness; run with cargo test large_session -- --ignored --nocapture"]
+    fn large_session_filter_perf_harness() -> TestResult {
+        let mut state = load_synthetic_state(25_000)?;
+
+        let started = std::time::Instant::now();
+        state.request_filter.clear();
+        state.apply_filter();
+        log_perf(
+            "large_session apply_filter all",
+            started.elapsed(),
+            state.filtered_request_rows.len(),
+        );
+
+        let started = std::time::Instant::now();
+        state.request_filter = "type:fetch status:2xx".to_string();
+        state.apply_filter();
+        log_perf(
+            "large_session apply_filter fetch 2xx",
+            started.elapsed(),
+            state.filtered_request_rows.len(),
+        );
+
+        let started = std::time::Instant::now();
+        state.request_filter = "has:error".to_string();
+        state.apply_filter();
+        log_perf(
+            "large_session apply_filter errors",
+            started.elapsed(),
+            state.filtered_request_rows.len(),
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "large-session perf harness; run with cargo test large_session -- --ignored --nocapture"]
+    fn large_session_route_append_perf_harness() -> TestResult {
+        let mut state = load_synthetic_state(25_000)?;
+        let existing_count = state.requests.len();
+        let appended = (existing_count..existing_count + 1_000)
+            .map(synthetic_request_view)
+            .collect::<Vec<_>>();
+        let appended_indices =
+            (existing_count..existing_count + appended.len()).collect::<Vec<_>>();
+        state.requests.extend(appended);
+
+        let started = std::time::Instant::now();
+        append_request_tree_metas(
+            &mut state.request_tree_metas,
+            &state.requests,
+            &appended_indices,
+            &state.request_route_descendant_counts,
+        );
+        for index in &appended_indices {
+            if let Some(meta) = state.request_tree_metas.get(*index) {
+                for group in &meta.ancestor_keys {
+                    *state
+                        .request_route_descendant_counts
+                        .entry(group.clone())
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+        state.sync_unfiltered_request_filter_state(&appended_indices);
+        log_perf(
+            "large_session append 1000 tree/filter rows",
+            started.elapsed(),
+            state.filtered_request_rows.len(),
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -303,6 +497,36 @@ mod tests {
     }
 
     #[test]
+    fn body_tree_respects_configured_item_limit() -> TestResult {
+        let store = Store::open_memory()?;
+        let mut state = WorkbenchState::load(
+            &store,
+            std::path::Path::new("memory.db"),
+            "http://localhost:5173",
+            AppConfig::default(),
+        )?;
+        state.config.ui.max_body_tree_items = 100;
+        let mut request = request_view();
+        request.response_body = Some(format!(
+            r#"{{"items":[{}]}}"#,
+            (0..150)
+                .map(|index| format!(r#"{{"id":{index},"name":"item-{index}"}}"#))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+        state.requests = vec![request];
+        state.request_tree_metas = build_request_tree_metas(&state.requests);
+        state.filtered_request_indices = vec![0];
+        state.rebuild_filtered_request_rows();
+        state.table_state.select(Some(0));
+
+        let items = state.body_tree_items();
+        assert!(items.len() <= 101);
+        assert!(items.iter().any(|item| item.label == "truncated"));
+        Ok(())
+    }
+
+    #[test]
     fn strips_expanded_route_segments_from_request_paths() {
         assert_eq!(
             strip_route_segments("/api/users/123/details?tab=profile", 3),
@@ -369,6 +593,41 @@ mod tests {
             Some("localhost:5173/api/users")
         );
         Ok(())
+    }
+
+    #[test]
+    fn appending_request_tree_metas_matches_full_rebuild() {
+        let mut parent = request_view();
+        parent.request.url = "http://localhost:5173/api/users".to_string();
+        let mut child = request_view();
+        child.request.url = "http://localhost:5173/api/users/123".to_string();
+        let mut sibling = request_view();
+        sibling.request.url = "http://localhost:5173/api/projects/456".to_string();
+
+        let mut requests = vec![parent];
+        let mut incremental = build_request_tree_metas(&requests);
+        let mut descendant_counts = descendant_counts_for_metas(&incremental);
+        requests.push(child);
+        requests.push(sibling);
+        append_request_tree_metas(&mut incremental, &requests, &[1, 2], &descendant_counts);
+        for index in [1, 2] {
+            if let Some(meta) = incremental.get(index) {
+                for group in &meta.ancestor_keys {
+                    *descendant_counts.entry(group.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let rebuilt = build_request_tree_metas(&requests);
+        assert_eq!(incremental.len(), rebuilt.len());
+        for (left, right) in incremental.iter().zip(rebuilt.iter()) {
+            assert_eq!(left.domain, right.domain);
+            assert_eq!(left.path, right.path);
+            assert_eq!(left.depth, right.depth);
+            assert_eq!(left.group_key, right.group_key);
+            assert_eq!(left.ancestor_keys, right.ancestor_keys);
+        }
+        assert_eq!(descendant_counts, descendant_counts_for_metas(&rebuilt));
     }
 
     #[test]

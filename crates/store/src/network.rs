@@ -2,6 +2,7 @@ use crate::rows::{request_from_row, response_from_row};
 use crate::{Result, Store, StoreError};
 use faro_core::{BodyRecord, ReplayRecord, RequestRecord, ResponseRecord};
 use rusqlite::{OptionalExtension, params};
+use std::collections::HashMap;
 
 impl Store {
     pub fn insert_request(&self, request: &RequestRecord) -> Result<()> {
@@ -250,27 +251,64 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    pub fn request_ids_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+             FROM requests
+             WHERE session_id = ?1
+             ORDER BY started_at ASC, id ASC",
+        )?;
+
+        let ids = stmt
+            .query_map(params![session_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(ids)
+    }
+
     pub fn requests_for_session_changed_after(
         &self,
         session_id: &str,
         started_after: i64,
         completed_after: i64,
     ) -> Result<Vec<RequestRecord>> {
-        let mut stmt = self.conn.prepare(
+        let mut requests_by_id = HashMap::new();
+        let mut started_stmt = self.conn.prepare(
             "SELECT id, session_id, tab_id, run_id, browser_request_id, started_at, completed_at,
                     method, url, resource_type, initiator, request_headers_json, request_body_ref, status
              FROM requests
              WHERE session_id = ?1
-               AND (started_at > ?2 OR completed_at > ?3)
+               AND started_at > ?2
              ORDER BY started_at ASC, id ASC",
         )?;
+        for request in started_stmt.query_map(params![session_id, started_after], |row| {
+            request_from_row(row)
+        })? {
+            let request = request?;
+            requests_by_id.insert(request.id.clone(), request);
+        }
 
-        let requests = stmt
-            .query_map(params![session_id, started_after, completed_after], |row| {
-                request_from_row(row)
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut completed_stmt = self.conn.prepare(
+            "SELECT id, session_id, tab_id, run_id, browser_request_id, started_at, completed_at,
+                    method, url, resource_type, initiator, request_headers_json, request_body_ref, status
+             FROM requests
+             WHERE session_id = ?1
+               AND completed_at > ?2
+             ORDER BY started_at ASC, id ASC",
+        )?;
+        for request in completed_stmt.query_map(params![session_id, completed_after], |row| {
+            request_from_row(row)
+        })? {
+            let request = request?;
+            requests_by_id.insert(request.id.clone(), request);
+        }
 
+        let mut requests = requests_by_id.into_values().collect::<Vec<_>>();
+        requests.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
         Ok(requests)
     }
 
@@ -335,7 +373,7 @@ impl Store {
                     responses.status_code, responses.status_text, responses.mime_type,
                     responses.response_headers_json, responses.body_ref,
                     responses.body_size, responses.body_truncated
-             FROM responses
+             FROM responses INDEXED BY idx_responses_received_request
              JOIN requests ON requests.id = responses.request_id
              WHERE requests.session_id = ?1
                AND responses.received_at > ?2

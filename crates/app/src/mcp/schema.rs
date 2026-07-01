@@ -40,6 +40,81 @@ pub(super) fn tools() -> Value {
             )
         ),
         tool(
+            "get_db_stats",
+            "Get Faro database maintenance stats including body storage totals, heavy sessions, repeated request groups, and table row counts.",
+            object_schema(
+                &[
+                    (
+                        "session_limit",
+                        "number",
+                        "Maximum heavy sessions to include, capped at 25."
+                    ),
+                    (
+                        "repeated_limit",
+                        "number",
+                        "Maximum repeated request groups to include, capped at 50."
+                    )
+                ],
+                &[]
+            )
+        ),
+        tool(
+            "list_heavy_sessions",
+            "List sessions ordered by captured body bytes and request volume.",
+            object_schema(
+                &[(
+                    "limit",
+                    "number",
+                    "Maximum sessions to return, capped at 100."
+                )],
+                &[]
+            )
+        ),
+        tool(
+            "list_repeated_requests",
+            "List repeated method/type/url groups that are likely to make a session noisy or large.",
+            object_schema(
+                &[(
+                    "limit",
+                    "number",
+                    "Maximum groups to return, capped at 200."
+                )],
+                &[]
+            )
+        ),
+        tool(
+            "prune_session",
+            "Prune one session using retention limits. Requires confirm=true and --mcp-allow-mutation.",
+            object_schema(
+                &[
+                    ("session_id", "string", "Faro session id to prune."),
+                    ("confirm", "boolean", "Must be true to prune session data."),
+                    ("max_requests", "number", "Keep only the newest N requests."),
+                    (
+                        "max_repeated",
+                        "number",
+                        "Keep only newest N requests per method/url/type group."
+                    ),
+                    (
+                        "max_console",
+                        "number",
+                        "Keep only the newest N console logs."
+                    ),
+                    (
+                        "max_ws",
+                        "number",
+                        "Keep only the newest N WebSocket frames."
+                    ),
+                    (
+                        "vacuum",
+                        "boolean",
+                        "Checkpoint WAL and vacuum after pruning."
+                    )
+                ],
+                &["session_id", "confirm"]
+            )
+        ),
+        tool(
             "delete_all_sessions",
             "Delete all Faro sessions and cascaded captured data. Requires confirm=true.",
             object_schema(

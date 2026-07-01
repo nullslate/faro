@@ -1,4 +1,5 @@
 use super::{RequestTreeMeta, RequestView};
+use faro_core::RequestRecord;
 use std::collections::HashMap;
 
 pub(crate) fn domain_for_url(url: &str) -> String {
@@ -61,6 +62,54 @@ pub(super) fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestT
             }
         })
         .collect()
+}
+
+pub(super) fn append_request_tree_metas(
+    metas: &mut Vec<RequestTreeMeta>,
+    requests: &[RequestView],
+    appended_indices: &[usize],
+    descendant_counts: &HashMap<String, usize>,
+) {
+    for index in appended_indices {
+        let Some(request) = requests.get(*index) else {
+            continue;
+        };
+        let mut meta = request_tree_meta_for_request(&request.request);
+        if let Some(group) = &meta.group_key {
+            meta.child_count = descendant_counts.get(group).copied().unwrap_or(0);
+            meta.has_children = meta.child_count > 0;
+        }
+        metas.push(meta);
+    }
+}
+
+fn request_tree_meta_for_request(request: &RequestRecord) -> RequestTreeMeta {
+    let domain = domain_for_url(&request.url);
+    let path = path_for_url(&request.url);
+    let mut parts = vec![domain.clone()];
+    parts.extend(normalized_path_segments(&path));
+    let group_key = group_key_for_parts(&parts);
+    let ancestor_keys = ancestor_keys_for_parts(&parts);
+    RequestTreeMeta {
+        domain,
+        path,
+        depth: parts.len().saturating_sub(1),
+        group_key,
+        ancestor_keys,
+        has_children: false,
+        child_count: 0,
+        collapsed: false,
+    }
+}
+
+pub(super) fn descendant_counts_for_metas(metas: &[RequestTreeMeta]) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for meta in metas {
+        for group in &meta.ancestor_keys {
+            *counts.entry(group.clone()).or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 fn normalized_path_segments(path: &str) -> Vec<String> {

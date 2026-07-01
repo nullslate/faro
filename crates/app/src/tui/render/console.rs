@@ -1,4 +1,5 @@
 use super::*;
+use crate::tui::state::ConsoleDetailLineCache;
 
 pub(super) fn render(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
     if app.console_logs.is_empty() {
@@ -71,7 +72,7 @@ fn render_console_detail(frame: &mut ratatui::Frame, area: Rect, app: &Workbench
     let selected = app.selected_console_log();
 
     let lines = selected
-        .map(console_detail_lines)
+        .map(|log| cached_console_detail_lines(app, log))
         .unwrap_or_else(|| vec![Line::styled("No console entry selected.", muted_style())]);
     let title = selected
         .map(console_detail_title)
@@ -82,22 +83,25 @@ fn render_console_detail(frame: &mut ratatui::Frame, area: Rect, app: &Workbench
     frame.render_widget(paragraph, area);
 }
 
+fn cached_console_detail_lines(app: &WorkbenchState, log: &ConsoleLog) -> Vec<Line<'static>> {
+    if let Some(cache) = app.console_detail_line_cache.borrow().as_ref()
+        && cache.log_id == log.id
+        && cache.message_len == log.message.len()
+    {
+        return cache.lines.clone();
+    }
+    let lines = console_detail_lines(log);
+    app.console_detail_line_cache
+        .replace(Some(ConsoleDetailLineCache {
+            log_id: log.id.clone(),
+            message_len: log.message.len(),
+            lines: lines.clone(),
+        }));
+    lines
+}
+
 fn console_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
-    let errors = app
-        .console_logs
-        .iter()
-        .filter(|log| matches!(log.level, ConsoleLevel::Error | ConsoleLevel::Fatal))
-        .count();
-    let warnings = app
-        .console_logs
-        .iter()
-        .filter(|log| matches!(log.level, ConsoleLevel::Warning))
-        .count();
-    let evals = app
-        .console_logs
-        .iter()
-        .filter(|log| log.source.as_deref() == Some("faro-console"))
-        .count();
+    let stats = &app.console_stats;
 
     vec![
         Line::from(vec![
@@ -109,8 +113,8 @@ fn console_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
             )),
             Span::styled("  errors ", label_style()),
             Span::styled(
-                errors.to_string(),
-                if errors == 0 {
+                stats.errors.to_string(),
+                if stats.errors == 0 {
                     Style::default().fg(GB_FG)
                 } else {
                     console_style(&ConsoleLevel::Error)
@@ -118,15 +122,15 @@ fn console_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
             ),
             Span::styled("  warnings ", label_style()),
             Span::styled(
-                warnings.to_string(),
-                if warnings == 0 {
+                stats.warnings.to_string(),
+                if stats.warnings == 0 {
                     Style::default().fg(GB_FG)
                 } else {
                     console_style(&ConsoleLevel::Warning)
                 },
             ),
             Span::styled("  evals ", label_style()),
-            Span::raw(evals.to_string()),
+            Span::raw(stats.evals.to_string()),
         ]),
         Line::from(vec![
             Span::styled("e ", key_style()),

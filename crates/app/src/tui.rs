@@ -3,6 +3,7 @@ mod editor;
 mod editor_actions;
 mod input;
 mod layout;
+mod live_refresh;
 mod mouse;
 mod render;
 mod replay_actions;
@@ -26,6 +27,7 @@ use editor_actions::{edit_console_expression, open_selected_item_in_editor};
 use faro_cdp::{CaptureOptions, CaptureUpdate};
 use faro_store::Store;
 use input::{InputOutcome, handle_key};
+use live_refresh::{LiveRefreshCompletion, spawn_live_refresh_worker};
 use mouse::handle_mouse;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -125,18 +127,25 @@ fn run_loop(
     let (replay_tx, replay_rx) = mpsc::channel();
     let (detail_tx, detail_rx) = mpsc::channel();
     let (session_delete_tx, session_delete_rx) = mpsc::channel();
+    let (live_refresh_tx, live_refresh_rx) = spawn_live_refresh_worker();
     let mut detail_inflight = HashSet::new();
     let mut session_delete_inflight = HashSet::new();
     let mut pending_detail_load = None;
     let mut first_pending_store_change = None;
     let mut last_pending_store_change = None;
+    let mut live_refresh_inflight = false;
+    let mut live_refresh_dirty = false;
     loop {
         let tick_started = Instant::now();
         let capture_started = Instant::now();
         if drain_capture_updates(app, config.updates.as_ref()) {
-            let now = Instant::now();
-            first_pending_store_change.get_or_insert(now);
-            last_pending_store_change = Some(now);
+            if live_refresh_inflight {
+                live_refresh_dirty = true;
+            } else {
+                let now = Instant::now();
+                first_pending_store_change.get_or_insert(now);
+                last_pending_store_change = Some(now);
+            }
         }
         app.perf.last_capture_drain_ms = capture_started.elapsed().as_millis();
         let replay_started = Instant::now();
@@ -146,25 +155,48 @@ fn run_loop(
         drain_detail_updates(app, &detail_rx, &mut detail_inflight);
         app.perf.last_detail_drain_ms = detail_started.elapsed().as_millis();
         drain_session_delete_updates(app, &session_delete_rx, &mut session_delete_inflight);
+        while let Ok(update) = live_refresh_rx.try_recv() {
+            live_refresh_inflight = false;
+            match update {
+                LiveRefreshCompletion::Loaded(delta) => {
+                    if app.apply_live_refresh_delta(delta) {
+                        needs_draw = true;
+                    }
+                    if live_refresh_dirty {
+                        let queued = queue_live_refresh(app, &live_refresh_tx);
+                        live_refresh_inflight = queued.inflight;
+                        needs_draw |= queued.needs_draw;
+                        live_refresh_dirty = false;
+                        first_pending_store_change = None;
+                        last_pending_store_change = None;
+                    }
+                }
+                LiveRefreshCompletion::Failed(error) => {
+                    app.status = format!("store reload failed: {error}");
+                    needs_draw = true;
+                    if live_refresh_dirty {
+                        let now = Instant::now();
+                        first_pending_store_change = Some(now);
+                        last_pending_store_change = Some(now);
+                        live_refresh_dirty = false;
+                    }
+                }
+            }
+        }
         maybe_start_selected_detail_load(
             app,
             &detail_tx,
             &mut detail_inflight,
             &mut pending_detail_load,
         );
-        if should_reload_store(first_pending_store_change, last_pending_store_change) {
-            match app.refresh_live_data() {
-                Ok(()) => {
-                    first_pending_store_change = None;
-                    last_pending_store_change = None;
-                    needs_draw = true;
-                }
-                Err(error) => {
-                    app.status = format!("store reload failed: {error}");
-                    first_pending_store_change = None;
-                    last_pending_store_change = None;
-                }
-            }
+        if !live_refresh_inflight
+            && should_reload_store(first_pending_store_change, last_pending_store_change)
+        {
+            let queued = queue_live_refresh(app, &live_refresh_tx);
+            live_refresh_inflight = queued.inflight;
+            needs_draw |= queued.needs_draw;
+            first_pending_store_change = None;
+            last_pending_store_change = None;
         }
         if app.status != last_status {
             app.note_status_changed();
@@ -273,6 +305,46 @@ fn should_reload_store(first_change: Option<Instant>, last_change: Option<Instan
     last_change
         .map(|last_change| last_change.elapsed() >= Duration::from_millis(150))
         .unwrap_or(false)
+}
+
+struct QueueRefreshOutcome {
+    inflight: bool,
+    needs_draw: bool,
+}
+
+fn queue_live_refresh(
+    app: &mut WorkbenchState,
+    live_refresh_tx: &mpsc::Sender<live_refresh::LiveRefreshRequest>,
+) -> QueueRefreshOutcome {
+    if let Some(request) = app.live_refresh_request() {
+        match live_refresh_tx.send(request) {
+            Ok(()) => QueueRefreshOutcome {
+                inflight: true,
+                needs_draw: false,
+            },
+            Err(error) => {
+                app.status = format!("store reload failed: {error}");
+                QueueRefreshOutcome {
+                    inflight: false,
+                    needs_draw: true,
+                }
+            }
+        }
+    } else {
+        match app.reload() {
+            Ok(()) => QueueRefreshOutcome {
+                inflight: false,
+                needs_draw: true,
+            },
+            Err(error) => {
+                app.status = format!("store reload failed: {error}");
+                QueueRefreshOutcome {
+                    inflight: false,
+                    needs_draw: true,
+                }
+            }
+        }
+    }
 }
 
 fn open_browser(app: &mut WorkbenchState, config: &mut RunConfig) {

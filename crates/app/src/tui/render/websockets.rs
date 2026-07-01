@@ -1,4 +1,5 @@
 use super::*;
+use crate::tui::state::WebSocketDetailLineCache;
 
 pub(super) fn render(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
     if app.websocket_frames.is_empty() {
@@ -84,7 +85,7 @@ fn render_websocket_stream(frame: &mut ratatui::Frame, area: Rect, app: &mut Wor
 fn render_websocket_detail(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let selected = app.selected_websocket_frame();
     let lines = selected
-        .map(websocket_detail_lines)
+        .map(|frame| cached_websocket_detail_lines(app, frame))
         .unwrap_or_else(|| vec![Line::styled("No frame selected.", muted_style())]);
     let title = selected
         .map(|frame| {
@@ -110,24 +111,28 @@ fn render_websocket_detail(frame: &mut ratatui::Frame, area: Rect, app: &Workben
     );
 }
 
+fn cached_websocket_detail_lines(
+    app: &WorkbenchState,
+    frame: &WebSocketFrameRecord,
+) -> Vec<Line<'static>> {
+    if let Some(cache) = app.websocket_detail_line_cache.borrow().as_ref()
+        && cache.frame_id == frame.id
+        && cache.payload_len == frame.payload.len()
+    {
+        return cache.lines.clone();
+    }
+    let lines = websocket_detail_lines(frame);
+    app.websocket_detail_line_cache
+        .replace(Some(WebSocketDetailLineCache {
+            frame_id: frame.id.clone(),
+            payload_len: frame.payload.len(),
+            lines: lines.clone(),
+        }));
+    lines
+}
+
 fn websocket_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
-    let sent = app
-        .websocket_frames
-        .iter()
-        .filter(|frame| matches!(frame.direction, WebSocketFrameDirection::Sent))
-        .count();
-    let received = app.websocket_frames.len().saturating_sub(sent);
-    let bytes = app
-        .websocket_frames
-        .iter()
-        .map(|frame| frame.payload.len())
-        .sum::<usize>();
-    let connections = app
-        .websocket_frames
-        .iter()
-        .map(|frame| frame.browser_request_id.as_str())
-        .collect::<std::collections::HashSet<_>>()
-        .len();
+    let stats = &app.websocket_stats;
 
     vec![
         Line::from(vec![
@@ -138,13 +143,13 @@ fn websocket_summary_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
                 app.websocket_frames.len()
             )),
             Span::styled("  conns ", label_style()),
-            Span::raw(connections.to_string()),
+            Span::raw(stats.connections.to_string()),
             Span::styled("  in ", label_style()),
-            Span::styled(received.to_string(), Style::default().fg(GB_BLUE)),
+            Span::styled(stats.received.to_string(), Style::default().fg(GB_BLUE)),
             Span::styled("  out ", label_style()),
-            Span::styled(sent.to_string(), Style::default().fg(GB_GREEN)),
+            Span::styled(stats.sent.to_string(), Style::default().fg(GB_GREEN)),
             Span::styled("  payload ", label_style()),
-            Span::raw(format_bytes(bytes as i64)),
+            Span::raw(format_bytes(stats.bytes as i64)),
         ]),
         Line::from(vec![
             Span::styled("j/k ", key_style()),

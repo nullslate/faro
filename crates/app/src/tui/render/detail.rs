@@ -93,8 +93,9 @@ pub(super) fn render_replay_workspace(
 }
 
 pub(super) fn render_body(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let lines = response_body_panel_lines(app);
-    let paragraph = Paragraph::new(lines)
+    let visible_rows = area.height.saturating_sub(2) as usize;
+    let panel = response_body_panel_lines(app, visible_rows);
+    let paragraph = Paragraph::new(panel.lines)
         .block(themed_panel_block(
             response_body_title(app),
             Some('B'),
@@ -102,7 +103,14 @@ pub(super) fn render_body(frame: &mut ratatui::Frame, area: Rect, app: &Workbenc
             &app.config.theme,
         ))
         .style(Style::default().fg(app.config.theme.text))
-        .scroll((app.body_scroll, 0))
+        .scroll((
+            if panel.pre_scrolled {
+                0
+            } else {
+                app.body_scroll
+            },
+            0,
+        ))
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
 }

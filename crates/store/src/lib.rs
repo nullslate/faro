@@ -13,7 +13,10 @@ mod sessions;
 mod sql;
 mod storage;
 
-pub use models::{ScriptRecord, SessionSummaryCounts};
+pub use models::{
+    BodyStorageStats, RepeatedRequestGroup, ScriptRecord, SessionStorageStats,
+    SessionSummaryCounts, TableRowCount,
+};
 use rows::{console_log_from_row, optional_json, parse_run_trigger, websocket_frame_from_row};
 pub use sql::SqlQueryResult;
 #[cfg(test)]
@@ -216,6 +219,21 @@ impl Store {
         Ok(logs)
     }
 
+    pub fn console_log_ids_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+             FROM console_logs
+             WHERE session_id = ?1
+             ORDER BY ts ASC, id ASC",
+        )?;
+
+        let ids = stmt
+            .query_map(params![session_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(ids)
+    }
+
     pub fn websocket_frames_for_session(
         &self,
         session_id: &str,
@@ -232,6 +250,21 @@ impl Store {
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(frames)
+    }
+
+    pub fn websocket_frame_ids_for_session(&self, session_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+             FROM websocket_frames
+             WHERE session_id = ?1
+             ORDER BY ts ASC, id ASC",
+        )?;
+
+        let ids = stmt
+            .query_map(params![session_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(ids)
     }
 
     pub fn websocket_frames_for_session_after(

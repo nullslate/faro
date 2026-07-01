@@ -8,16 +8,18 @@ mod rows;
 mod tui;
 mod websockets;
 
-#[cfg(test)]
+pub(crate) use request_filter::filter_depends_on_response;
 pub(crate) use routes::path_for_url;
 #[cfg(test)]
 pub(crate) use routes::request_matches_route;
 pub(crate) use rows::{
     RequestListQuery, RequestRow, latest_responses_by_request, list_request_rows, request_row,
 };
+#[cfg(test)]
+pub(crate) use tui::query_requests;
 pub(crate) use tui::{
     RequestQueryItem, RequestQueryMeta, RequestQueryOptions, RequestQueryResult, RequestSort,
-    query_requests,
+    query_requests_iter,
 };
 
 pub(crate) fn filter_console_indices(logs: &[ConsoleLog], filter: &str) -> Vec<usize> {
@@ -131,6 +133,86 @@ mod tests {
             result.route_descendant_counts.get("localhost:5173/api"),
             Some(&1)
         );
+    }
+
+    #[test]
+    fn tui_request_query_fast_common_filters_match_expected_rows() {
+        let ancestor_keys = vec!["localhost:5173/api".to_string()];
+        let fetch_ok = RequestQueryItem {
+            index: 0,
+            id: "request-1",
+            method: "GET",
+            url: "http://localhost:5173/api/users",
+            resource_type: Some("fetch"),
+            status_code: Some(200),
+            started_at: 100,
+            completed_at: Some(220),
+            mime_type: Some("application/json"),
+            body_size: Some(128),
+            request_headers: &[],
+            response_headers: &[],
+            request_body: None,
+            response_body: None,
+            replay_count: 0,
+            meta: Some(RequestQueryMeta {
+                domain: "localhost:5173",
+                path: "/api/users",
+                ancestor_keys: &ancestor_keys,
+            }),
+        };
+        let fetch_error = RequestQueryItem {
+            index: 1,
+            status_code: Some(500),
+            replay_count: 1,
+            ..fetch_ok
+        };
+        let script_ok = RequestQueryItem {
+            index: 2,
+            id: "request-3",
+            resource_type: Some("script"),
+            status_code: Some(200),
+            ..fetch_ok
+        };
+        let requests = [fetch_ok, fetch_error, script_ok];
+
+        let fetch_2xx = query_requests(
+            &requests,
+            &RequestQueryOptions {
+                filter: "type:fetch status:2xx",
+                sql_request_filter_ids: None,
+                hidden_before: None,
+                active_route_group: None,
+                sort: RequestSort::Started,
+                sort_descending: false,
+            },
+        );
+        assert_eq!(fetch_2xx.indices, vec![0]);
+
+        let errors = query_requests(
+            &requests,
+            &RequestQueryOptions {
+                filter: "has:error",
+                sql_request_filter_ids: None,
+                hidden_before: None,
+                active_route_group: None,
+                sort: RequestSort::Started,
+                sort_descending: false,
+            },
+        );
+        assert_eq!(errors.indices, vec![1]);
+
+        let replayed = query_requests(
+            &requests,
+            &RequestQueryOptions {
+                filter: "has:replay",
+                sql_request_filter_ids: None,
+                hidden_before: None,
+                active_route_group: None,
+                sort: RequestSort::Started,
+                sort_descending: false,
+            },
+        );
+        assert_eq!(replayed.indices, vec![1]);
     }
 
     #[test]

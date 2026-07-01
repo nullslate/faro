@@ -45,6 +45,9 @@ pub(super) fn handle_capture(options: CliOptions, args: Vec<String>) -> anyhow::
         url,
         attach_port: options.attach_port,
         launch_port: options.launch_port,
+        max_requests_per_session: options.max_requests_per_session,
+        max_repeated_requests_per_url: options.max_repeated_requests_per_url,
+        prune_interval_requests: options.prune_interval_requests,
     };
     let updates = faro_cdp::spawn_capture(capture_options);
     let deadline = duration.map(|duration| Instant::now() + duration);

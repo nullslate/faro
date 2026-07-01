@@ -51,6 +51,7 @@ impl WorkbenchState {
         let selected_id = self.selected_console_log().map(|log| log.id.clone());
         self.filtered_console_indices =
             filter_console_indices(&self.console_logs, &self.console_filter);
+        self.rebuild_filtered_console_positions_by_id();
 
         let selected = selected_id
             .and_then(|id| self.filtered_index_for_console_id(&id))
@@ -64,21 +65,48 @@ impl WorkbenchState {
             .map(|frame| frame.id.clone());
         self.filtered_websocket_indices =
             filter_websocket_indices(&self.websocket_frames, &self.websocket_filter);
+        self.rebuild_filtered_websocket_positions_by_id();
 
         let selected = selected_id
-            .and_then(|id| {
-                self.filtered_websocket_indices.iter().position(|index| {
-                    self.websocket_frames.get(*index).map(|frame| &frame.id) == Some(&id)
-                })
-            })
+            .and_then(|id| self.filtered_index_for_websocket_id(&id))
             .or_else(|| (!self.filtered_websocket_indices.is_empty()).then_some(0));
         self.websocket_state.select(selected);
     }
 
     fn filtered_index_for_console_id(&self, log_id: &str) -> Option<usize> {
-        self.filtered_console_indices
+        self.filtered_console_positions_by_id.get(log_id).copied()
+    }
+
+    fn filtered_index_for_websocket_id(&self, frame_id: &str) -> Option<usize> {
+        self.filtered_websocket_positions_by_id
+            .get(frame_id)
+            .copied()
+    }
+
+    fn rebuild_filtered_console_positions_by_id(&mut self) {
+        self.filtered_console_positions_by_id = self
+            .filtered_console_indices
             .iter()
-            .position(|index| self.console_logs[*index].id == log_id)
+            .enumerate()
+            .filter_map(|(position, log_index)| {
+                self.console_logs
+                    .get(*log_index)
+                    .map(|log| (log.id.clone(), position))
+            })
+            .collect();
+    }
+
+    fn rebuild_filtered_websocket_positions_by_id(&mut self) {
+        self.filtered_websocket_positions_by_id = self
+            .filtered_websocket_indices
+            .iter()
+            .enumerate()
+            .filter_map(|(position, frame_index)| {
+                self.websocket_frames
+                    .get(*frame_index)
+                    .map(|frame| (frame.id.clone(), position))
+            })
+            .collect();
     }
 
     pub(crate) fn selected_console_log(&self) -> Option<&ConsoleLog> {

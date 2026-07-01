@@ -98,18 +98,23 @@ impl WorkbenchState {
     }
 
     pub(super) fn apply_filter(&mut self) {
+        let started = Instant::now();
         let selected_id = self
             .selected_request()
             .map(|request| request.request.id.clone());
         let result = if self.can_apply_unfiltered_request_fast_path() {
             self.unfiltered_request_query_result()
         } else {
-            let query_items = self.request_query_items();
-            query_requests(&query_items, &self.request_query_options())
+            query_requests_iter(
+                self.request_query_items_iter(),
+                &self.request_query_options(),
+            )
         };
         self.filtered_request_indices = result.indices;
         self.filtered_request_rows = result.rows;
+        self.rebuild_filtered_request_positions_by_id();
         self.filtered_route_descendant_counts = result.route_descendant_counts;
+        self.active_route_summary_cache = self.compute_active_route_summary();
 
         let selected = selected_id
             .and_then(|id| self.filtered_index_for_request_id(&id))
@@ -117,9 +122,60 @@ impl WorkbenchState {
         self.table_state.select(selected);
         self.reset_request_view_scroll();
         self.hydrate_selected_request_for_active_detail();
+        self.perf.last_filter_ms = started.elapsed().as_millis();
+        self.perf.max_filter_ms = self.perf.max_filter_ms.max(self.perf.last_filter_ms);
     }
 
-    fn can_apply_unfiltered_request_fast_path(&self) -> bool {
+    pub(super) fn sync_unfiltered_request_filter_state(&mut self, appended_indices: &[usize]) {
+        let started = Instant::now();
+        let should_select_first = self.table_state.selected().is_none()
+            && self.filtered_request_rows.is_empty()
+            && !appended_indices.is_empty();
+
+        for index in appended_indices {
+            let row_index = self.filtered_request_rows.len();
+            self.filtered_request_indices.push(*index);
+            self.filtered_request_rows.push(*index);
+            if let Some(request) = self.requests.get(*index) {
+                self.filtered_request_positions_by_id
+                    .insert(request.request.id.clone(), row_index);
+            }
+        }
+
+        if self.filtered_route_descendant_counts.is_empty()
+            && !self.request_route_descendant_counts.is_empty()
+            && self.filtered_request_rows.len() > appended_indices.len()
+        {
+            self.filtered_route_descendant_counts = self.request_route_descendant_counts.clone();
+        } else {
+            for index in appended_indices {
+                if let Some(meta) = self.request_tree_metas.get(*index) {
+                    for group in &meta.ancestor_keys {
+                        *self
+                            .filtered_route_descendant_counts
+                            .entry(group.clone())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+        self.active_route_summary_cache = None;
+        if should_select_first {
+            self.table_state.select(Some(0));
+        }
+        self.perf.last_filter_ms = started.elapsed().as_millis();
+        self.perf.max_filter_ms = self.perf.max_filter_ms.max(self.perf.last_filter_ms);
+    }
+
+    pub(super) fn response_updates_affect_request_query(&self) -> bool {
+        filter_depends_on_response(&self.request_filter)
+            || matches!(
+                self.sort_mode,
+                SortMode::Status | SortMode::Duration | SortMode::Size
+            )
+    }
+
+    pub(super) fn can_apply_unfiltered_request_fast_path(&self) -> bool {
         self.request_filter.is_empty()
             && self.sql_request_filter_ids.is_none()
             && self.requests_hidden_before.is_none()
@@ -130,12 +186,13 @@ impl WorkbenchState {
 
     fn unfiltered_request_query_result(&self) -> RequestQueryResult {
         let indices = (0..self.requests.len()).collect::<Vec<_>>();
-        let mut route_descendant_counts = HashMap::new();
-        for meta in &self.request_tree_metas {
-            for group in &meta.ancestor_keys {
-                *route_descendant_counts.entry(group.clone()).or_insert(0) += 1;
-            }
-        }
+        let route_descendant_counts = if self.request_route_descendant_counts.is_empty()
+            && !self.request_tree_metas.is_empty()
+        {
+            descendant_counts_for_metas(&self.request_tree_metas)
+        } else {
+            self.request_route_descendant_counts.clone()
+        };
         RequestQueryResult {
             rows: indices.clone(),
             indices,
@@ -143,49 +200,59 @@ impl WorkbenchState {
         }
     }
 
-    fn request_query_items(&self) -> Vec<RequestQueryItem<'_>> {
+    fn request_query_items_iter(&self) -> impl Iterator<Item = RequestQueryItem<'_>> {
         self.requests
             .iter()
             .enumerate()
-            .map(|(index, request)| {
-                let response_headers = request
-                    .response
-                    .as_ref()
-                    .map(|response| response.response_headers.as_slice())
-                    .unwrap_or(&[]);
-                RequestQueryItem {
-                    index,
-                    id: &request.request.id,
-                    method: &request.request.method,
-                    url: &request.request.url,
-                    resource_type: request.request.resource_type.as_deref(),
-                    status_code: request.status_code(),
-                    started_at: request.request.started_at,
-                    completed_at: request.request.completed_at,
-                    mime_type: request
-                        .response
-                        .as_ref()
-                        .and_then(|response| response.mime_type.as_deref()),
-                    body_size: request
-                        .response
-                        .as_ref()
-                        .and_then(|response| response.body_size),
-                    request_headers: &request.request.request_headers,
-                    response_headers,
-                    request_body: request.request_body.as_deref(),
-                    response_body: request.response_body.as_deref(),
-                    replay_count: request.replays.len(),
-                    meta: self
-                        .request_tree_metas
-                        .get(index)
-                        .map(|meta| RequestQueryMeta {
-                            domain: &meta.domain,
-                            path: &meta.path,
-                            ancestor_keys: &meta.ancestor_keys,
-                        }),
-                }
-            })
-            .collect()
+            .map(|(index, request)| self.request_query_item(index, request))
+    }
+
+    fn request_query_item<'a>(
+        &'a self,
+        index: usize,
+        request: &'a RequestView,
+    ) -> RequestQueryItem<'a> {
+        let response_headers = request
+            .response
+            .as_ref()
+            .map(|response| response.response_headers.as_slice())
+            .unwrap_or(&[]);
+        RequestQueryItem {
+            index,
+            id: &request.request.id,
+            method: &request.request.method,
+            url: &request.request.url,
+            resource_type: request.request.resource_type.as_deref(),
+            status_code: request.status_code(),
+            started_at: request.request.started_at,
+            completed_at: request.request.completed_at,
+            mime_type: request
+                .response
+                .as_ref()
+                .and_then(|response| response.mime_type.as_deref()),
+            body_size: request
+                .response
+                .as_ref()
+                .and_then(|response| response.body_size),
+            request_headers: &request.request.request_headers,
+            response_headers,
+            request_body: request.request_body.as_deref(),
+            response_body: request.response_body.as_deref(),
+            replay_count: request.replays.len(),
+            meta: self
+                .request_tree_metas
+                .get(index)
+                .map(|meta| RequestQueryMeta {
+                    domain: &meta.domain,
+                    path: &meta.path,
+                    ancestor_keys: &meta.ancestor_keys,
+                }),
+        }
+    }
+
+    #[cfg(test)]
+    fn request_query_items(&self) -> Vec<RequestQueryItem<'_>> {
+        self.request_query_items_iter().collect()
     }
 
     fn request_query_options(&self) -> RequestQueryOptions<'_> {
@@ -203,20 +270,35 @@ impl WorkbenchState {
     pub(super) fn rebuild_filtered_route_descendant_counts(&mut self) {
         let result = {
             let query_items = self.request_query_items();
-            query_requests(&query_items, &self.request_query_options())
+            query_requests_iter(query_items.iter().copied(), &self.request_query_options())
         };
         self.filtered_route_descendant_counts = result.route_descendant_counts;
+        self.active_route_summary_cache = self.compute_active_route_summary();
     }
 
     #[cfg(test)]
     pub(super) fn rebuild_filtered_request_rows(&mut self) {
         self.filtered_request_rows = self.filtered_request_indices.clone();
+        self.rebuild_filtered_request_positions_by_id();
     }
 
     pub(super) fn filtered_index_for_request_id(&self, request_id: &str) -> Option<usize> {
-        self.filtered_request_rows
+        self.filtered_request_positions_by_id
+            .get(request_id)
+            .copied()
+    }
+
+    fn rebuild_filtered_request_positions_by_id(&mut self) {
+        self.filtered_request_positions_by_id = self
+            .filtered_request_rows
             .iter()
-            .position(|index| self.requests[*index].request.id == request_id)
+            .enumerate()
+            .filter_map(|(position, request_index)| {
+                self.requests
+                    .get(*request_index)
+                    .map(|request| (request.request.id.clone(), position))
+            })
+            .collect();
     }
 
     pub(super) fn selected_request_index(&self) -> Option<usize> {
@@ -253,8 +335,27 @@ impl WorkbenchState {
     }
 
     pub(crate) fn request_can_drill_down(&self, request_index: usize) -> bool {
-        self.drilldown_group_key_for_request_index(request_index)
-            .is_some()
+        let Some(meta) = self.request_tree_metas.get(request_index) else {
+            return false;
+        };
+        let group = meta
+            .group_key
+            .as_deref()
+            .filter(|key| self.route_group_child_count(key) > 0)
+            .or_else(|| {
+                meta.ancestor_keys
+                    .iter()
+                    .rev()
+                    .map(String::as_str)
+                    .find(|key| self.route_group_child_count(key) > 0)
+            });
+        let Some(group) = group else {
+            return false;
+        };
+        self.active_request_route_group
+            .as_deref()
+            .map(|active| group != active && route_group_is_descendant_of(group, active))
+            .unwrap_or(true)
     }
 
     pub(super) fn route_group_child_count(&self, group: &str) -> usize {
@@ -264,6 +365,7 @@ impl WorkbenchState {
             .unwrap_or(0)
     }
 
+    #[cfg(test)]
     pub(crate) fn request_tree_meta(&self, request_index: usize) -> Option<RequestTreeMeta> {
         let mut meta = self.request_tree_metas.get(request_index)?.clone();
         if let Some(group) = &meta.group_key {
@@ -294,6 +396,10 @@ impl WorkbenchState {
     }
 
     pub(crate) fn active_route_summary(&self) -> Option<RouteSummary> {
+        self.active_route_summary_cache.clone()
+    }
+
+    pub(super) fn compute_active_route_summary(&self) -> Option<RouteSummary> {
         self.active_request_route_group.as_ref()?;
         let mut summary = RouteSummary::default();
         for index in &self.filtered_request_indices {
@@ -325,16 +431,15 @@ impl WorkbenchState {
     }
 
     pub(crate) fn request_route_remainder(&self, request_index: usize) -> Option<String> {
-        let active_group = self.active_expanded_request_group()?;
+        let active_group = self.active_request_route_group.as_deref()?;
         let meta = self.request_tree_metas.get(request_index)?;
-        let in_active_group = meta.ancestor_keys.iter().any(|key| key == &active_group);
+        let in_active_group = meta.ancestor_keys.iter().any(|key| key == active_group);
         if !in_active_group {
             return None;
         }
-        let raw_path = path_for_url(&self.requests.get(request_index)?.request.url);
         Some(strip_route_segments(
-            &raw_path,
-            group_path_segment_count(&active_group),
+            &meta.path,
+            group_path_segment_count(active_group),
         ))
     }
 
@@ -346,4 +451,120 @@ impl WorkbenchState {
         self.body_tree_selected_key = None;
         self.collapsed_body_nodes.clear();
     }
+}
+
+pub(crate) fn compute_request_stats(requests: &[RequestView]) -> RequestStats {
+    let mut stats = RequestStats::default();
+    for request in requests {
+        add_request_stats_contribution(&mut stats, request_stats_contribution(request));
+    }
+    sync_request_stats_average(&mut stats);
+
+    stats
+}
+
+pub(crate) fn apply_request_stats_replacement(
+    stats: &mut RequestStats,
+    before: Option<RequestStatsContribution>,
+    after: Option<RequestStatsContribution>,
+) -> bool {
+    let requires_rebuild = before
+        .as_ref()
+        .and_then(|contribution| contribution.duration_ms)
+        .is_some_and(|duration| stats.max_duration_ms == Some(duration));
+    if let Some(before) = before {
+        subtract_request_stats_contribution(stats, before);
+    }
+    if let Some(after) = after {
+        add_request_stats_contribution(stats, after);
+    }
+    sync_request_stats_average(stats);
+    requires_rebuild
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct RequestStatsContribution {
+    status_code: Option<i64>,
+    replayed: bool,
+    body_size: Option<i64>,
+    duration_ms: Option<i64>,
+}
+
+pub(crate) fn request_stats_contribution(request: &RequestView) -> RequestStatsContribution {
+    RequestStatsContribution {
+        status_code: request.status_code(),
+        replayed: !request.replays.is_empty(),
+        body_size: request
+            .response
+            .as_ref()
+            .and_then(|response| response.body_size),
+        duration_ms: request.duration_ms(),
+    }
+}
+
+fn add_request_stats_contribution(
+    stats: &mut RequestStats,
+    contribution: RequestStatsContribution,
+) {
+    match contribution.status_code {
+        Some(200..=299) => stats.ok += 1,
+        Some(300..=399) => stats.redirect += 1,
+        Some(400..=499) => stats.client += 1,
+        Some(500..=599) => stats.server += 1,
+        None => stats.pending += 1,
+        Some(_) => {}
+    }
+    if contribution.replayed {
+        stats.replayed += 1;
+    }
+    if let Some(size) = contribution.body_size {
+        stats.total_size += size;
+    }
+    if let Some(duration) = contribution.duration_ms {
+        stats.duration_total_ms += duration;
+        stats.duration_count += 1;
+        stats.max_duration_ms = Some(stats.max_duration_ms.unwrap_or(duration).max(duration));
+        if duration >= 500 {
+            stats.slow += 1;
+        }
+    }
+}
+
+fn subtract_request_stats_contribution(
+    stats: &mut RequestStats,
+    contribution: RequestStatsContribution,
+) {
+    match contribution.status_code {
+        Some(200..=299) => stats.ok = stats.ok.saturating_sub(1),
+        Some(300..=399) => stats.redirect = stats.redirect.saturating_sub(1),
+        Some(400..=499) => stats.client = stats.client.saturating_sub(1),
+        Some(500..=599) => stats.server = stats.server.saturating_sub(1),
+        None => stats.pending = stats.pending.saturating_sub(1),
+        Some(_) => {}
+    }
+    if contribution.replayed {
+        stats.replayed = stats.replayed.saturating_sub(1);
+    }
+    if let Some(size) = contribution.body_size {
+        stats.total_size = stats.total_size.saturating_sub(size);
+    }
+    if let Some(duration) = contribution.duration_ms {
+        stats.duration_total_ms = stats.duration_total_ms.saturating_sub(duration);
+        stats.duration_count = stats.duration_count.saturating_sub(1);
+        if duration >= 500 {
+            stats.slow = stats.slow.saturating_sub(1);
+        }
+    }
+}
+
+fn sync_request_stats_average(stats: &mut RequestStats) {
+    stats.avg_duration_ms =
+        (stats.duration_count > 0).then(|| stats.duration_total_ms / stats.duration_count as i64);
+}
+
+fn route_group_is_descendant_of(group: &str, active: &str) -> bool {
+    group
+        .strip_prefix(active)
+        .and_then(|suffix| suffix.strip_prefix('/'))
+        .is_some()
 }

@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 pub(super) fn render(frame: &mut ratatui::Frame, app: &WorkbenchState) {
-    let area = top_right_rect(frame.area(), 54, 15);
+    let area = top_right_rect(frame.area(), 54, 19);
     frame.render_widget(Clear, area);
     let selected = app.selected_request();
     let body_state = selected
@@ -40,6 +40,27 @@ pub(super) fn render(frame: &mut ratatui::Frame, app: &WorkbenchState) {
         perf_line("frame", app.perf.last_frame_ms, app.perf.max_frame_ms),
         perf_line("tick", app.perf.last_tick_ms, app.perf.max_tick_ms),
         perf_line("poll", app.perf.last_poll_ms, app.perf.max_poll_ms),
+        perf_line(
+            "db refresh",
+            app.perf.last_db_refresh_ms,
+            app.perf.max_db_refresh_ms,
+        ),
+        perf_line(
+            "live merge",
+            app.perf.last_live_merge_ms,
+            app.perf.max_live_merge_ms,
+        ),
+        perf_line("filter", app.perf.last_filter_ms, app.perf.max_filter_ms),
+        perf_line(
+            "tree",
+            app.perf.last_tree_build_ms,
+            app.perf.max_tree_build_ms,
+        ),
+        perf_line(
+            "req render",
+            app.perf.last_request_render_ms,
+            app.perf.max_request_render_ms,
+        ),
         Line::from(vec![
             Span::styled("drain ", label_style()),
             Span::raw(format!(

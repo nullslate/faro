@@ -252,6 +252,7 @@ pub(super) fn request_tree_marker(
     let indent = meta
         .map(|meta| "  ".repeat(meta.depth.saturating_sub(1).min(6)))
         .unwrap_or_default();
+    let _collapsed = meta.map(|meta| meta.collapsed).unwrap_or(false);
     let dot = if can_drill_down { "›" } else { "" };
     let dot_style = if can_drill_down {
         fade.accent_style(theme.active_border)

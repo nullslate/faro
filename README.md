@@ -184,6 +184,9 @@ faro console errors --json
 faro storage get localStorage auth --json
 faro cookies list --json
 faro sessions list --json
+faro sessions prune <session-id> --max-requests 5000 --max-repeated 25 --max-console 2000 --max-ws 5000
+faro db stats
+faro db compact --vacuum
 ```
 
 Replay and query:
@@ -198,6 +201,22 @@ Clear captured sessions and their cascaded request/console/storage/cookie/replay
 ```sh
 faro sessions nuke --yes
 ```
+
+Trim one noisy session while keeping recent data:
+
+```sh
+faro sessions prune <session-id> --max-requests 5000 --max-repeated 25 --max-console 2000 --max-ws 5000
+```
+
+Compact the database after deleting old sessions or pruning lots of captured data:
+
+```sh
+faro db stats
+faro db compact --vacuum
+```
+
+`faro sessions compact --vacuum` is kept as a compatible alias. Compaction deletes orphaned body rows and, with `--vacuum`, checkpoints WAL and asks SQLite to reclaim file space.
+`faro db stats` reports database/WAL sizes, body byte totals, top sessions by captured weight, top repeated request groups, and table row counts so you can see whether payloads or metadata are driving growth.
 
 Route filters accept:
 
@@ -287,6 +306,10 @@ Use Faro read-only SQL to group captured requests by domain and status code. Hig
 | `capture_url` | Launch or attach to Chromium and capture a URL for a bounded duration. Requires `--mcp-allow-mutation`. |
 | `list_sessions` | List capture sessions with request/error/replay/storage counts. |
 | `get_session` | Get one capture session and summary counts. |
+| `get_db_stats` | Return DB maintenance stats, including body totals, heavy sessions, repeated request groups, and table counts. |
+| `list_heavy_sessions` | List sessions ordered by captured body bytes and request volume. |
+| `list_repeated_requests` | List repeated method/type/url groups that are likely to make a session noisy or large. |
+| `prune_session` | Prune one session with retention limits; requires `confirm: true` and `--mcp-allow-mutation`. |
 | `delete_all_sessions` | Delete all sessions and cascaded captured data; requires `confirm: true` and `--mcp-allow-mutation`. |
 | `list_requests` | List captured requests, with route/filter support for narrowing results. Accepts optional `session_id`. |
 | `get_request` | Fetch request metadata, headers, response metadata, and body references. |
@@ -373,6 +396,7 @@ launch_on_start = false
 
 [ui]
 bottom_fade_rows = 3
+max_body_tree_items = 2000
 
 [theme]
 text = "#d4be98"
@@ -415,6 +439,16 @@ cargo run -- http://localhost:5173
 cargo run -- capture http://localhost:5173 --for 10s --json
 cargo run -- --db /tmp/faro.db mcp
 ```
+
+Run the opt-in performance harnesses:
+
+```sh
+scripts/perf-smoke.sh
+cargo test large_session -- --ignored --nocapture
+cargo test render_perf -- --ignored --nocapture
+```
+
+Useful rough targets on a development machine are sub-frame request filtering at 25k rows, low-single-digit millisecond live DB deltas, and render paths under a 16ms frame budget. Treat these as regression checks rather than portable benchmarks.
 
 ## Next Up
 

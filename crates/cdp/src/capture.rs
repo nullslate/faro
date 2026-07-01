@@ -49,6 +49,9 @@ pub struct CaptureOptions {
     pub url: String,
     pub attach_port: Option<u16>,
     pub launch_port: Option<u16>,
+    pub max_requests_per_session: usize,
+    pub max_repeated_requests_per_url: usize,
+    pub prune_interval_requests: usize,
 }
 
 impl CaptureOptions {
@@ -58,6 +61,9 @@ impl CaptureOptions {
             url,
             attach_port: None,
             launch_port: None,
+            max_requests_per_session: 5_000,
+            max_repeated_requests_per_url: 250,
+            prune_interval_requests: 250,
         }
     }
 }
@@ -66,6 +72,9 @@ pub async fn capture_url(
     options: CaptureOptions,
     updates: std::sync::mpsc::Sender<CaptureUpdate>,
 ) -> Result<()> {
+    let max_requests_per_session = options.max_requests_per_session;
+    let max_repeated_requests_per_url = options.max_repeated_requests_per_url;
+    let prune_interval_requests = options.prune_interval_requests.max(1);
     let CaptureContext {
         _browser,
         target,
@@ -87,6 +96,7 @@ pub async fn capture_url(
     let mut pending_completions = HashMap::<String, RequestStatus>::new();
     let mut response_mime_types = HashMap::<String, Option<String>>::new();
     let mut snapshots_requested = false;
+    let mut requests_since_prune = 0usize;
 
     while let Some(message) = ws.next().await {
         let message = message?;
@@ -159,6 +169,15 @@ pub async fn capture_url(
                         &store,
                         BrowserEvent::RequestStarted(event),
                     )?;
+                    requests_since_prune = requests_since_prune.saturating_add(1);
+                    if requests_since_prune >= prune_interval_requests {
+                        store.prune_repeated_session_requests(
+                            &session.id,
+                            max_repeated_requests_per_url,
+                        )?;
+                        store.prune_session_requests(&session.id, max_requests_per_session)?;
+                        requests_since_prune = 0;
+                    }
                     let _ = updates.send(CaptureUpdate::StoreChanged);
                 }
             }

@@ -25,6 +25,11 @@ pub(crate) fn request_matches_filter(row: &RequestRow, expr: &str) -> bool {
     request_contains(row, expr)
 }
 
+pub(crate) fn filter_depends_on_response(input: &str) -> bool {
+    let filter = TuiRequestFilter::parse(input);
+    filter.depends_on_response()
+}
+
 fn parse_filter_expr(expr: &str) -> Option<(String, String, String)> {
     let operators = [">=", "<=", "==", "!=", ">", "<", "=", "contains", "~"];
     if let [field, op, value @ ..] = expr.split_whitespace().collect::<Vec<_>>().as_slice()
@@ -109,6 +114,229 @@ fn request_contains(row: &RequestRow, needle: &str) -> bool {
             .status_code
             .map(|status| status.to_string().contains(&needle))
             .unwrap_or(false)
+}
+
+pub(super) enum CompiledRequestFilter {
+    Fast(FastRequestFilter),
+    Generic(Box<TuiRequestFilter>),
+}
+
+impl CompiledRequestFilter {
+    pub(super) fn parse(input: &str) -> Self {
+        fast_filter_for(input)
+            .map(Self::Fast)
+            .unwrap_or_else(|| Self::Generic(Box::new(TuiRequestFilter::parse(input))))
+    }
+
+    pub(super) fn matches(&self, request: &RequestQueryItem<'_>) -> bool {
+        match self {
+            Self::Fast(filter) => filter.matches(request),
+            Self::Generic(filter) => filter.matches(request),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct FastRequestFilter {
+    method: Option<String>,
+    resource_type: Option<String>,
+    status: Option<FastStatusFilter>,
+    has: Vec<FastHasFilter>,
+    duration: Option<Threshold>,
+    size: Option<Threshold>,
+}
+
+impl FastRequestFilter {
+    fn matches(&self, request: &RequestQueryItem<'_>) -> bool {
+        if let Some(method) = &self.method
+            && !contains_ignore_ascii_case(request.method, method)
+        {
+            return false;
+        }
+        if let Some(resource_type) = &self.resource_type
+            && !request
+                .resource_type
+                .map(|value| contains_ignore_ascii_case(value, resource_type))
+                .unwrap_or(false)
+        {
+            return false;
+        }
+        if let Some(status) = self.status
+            && !status.matches(request.status_code)
+        {
+            return false;
+        }
+        if self.has.iter().any(|filter| !filter.matches(request)) {
+            return false;
+        }
+        if let Some(threshold) = self.duration
+            && !duration_ms(request)
+                .map(|duration| threshold.matches(duration))
+                .unwrap_or(false)
+        {
+            return false;
+        }
+        if let Some(threshold) = self.size
+            && !request
+                .body_size
+                .map(|size| threshold.matches(size))
+                .unwrap_or(false)
+        {
+            return false;
+        }
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FastStatusFilter {
+    Pending,
+    Exact(i64),
+    Class(i64),
+}
+
+impl FastStatusFilter {
+    fn parse(value: &str) -> Option<Self> {
+        if value == "-" {
+            return Some(Self::Pending);
+        }
+        if let Some(prefix) = value.strip_suffix("xx")
+            && prefix.len() == 1
+        {
+            let Ok(class) = prefix.parse::<i64>() else {
+                return None;
+            };
+            return Some(Self::Class(class));
+        }
+        if value.len() != 3 {
+            return None;
+        }
+        let Ok(status) = value.parse::<i64>() else {
+            return None;
+        };
+        Some(Self::Exact(status))
+    }
+
+    fn matches(self, status_code: Option<i64>) -> bool {
+        match self {
+            Self::Pending => status_code.is_none(),
+            Self::Exact(expected) => status_code == Some(expected),
+            Self::Class(class) => status_code
+                .map(|status| status / 100 == class)
+                .unwrap_or(false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FastHasFilter {
+    Body,
+    RequestBody,
+    ResponseBody,
+    Headers,
+    Replay,
+    Error,
+    Pending,
+}
+
+impl FastHasFilter {
+    fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "body" => Self::Body,
+            "reqbody" | "request-body" => Self::RequestBody,
+            "resbody" | "response-body" => Self::ResponseBody,
+            "headers" => Self::Headers,
+            "replay" | "replays" => Self::Replay,
+            "error" => Self::Error,
+            "pending" => Self::Pending,
+            _ => return None,
+        })
+    }
+
+    fn matches(self, request: &RequestQueryItem<'_>) -> bool {
+        match self {
+            Self::Body => request.request_body.is_some() || request.response_body.is_some(),
+            Self::RequestBody => request.request_body.is_some(),
+            Self::ResponseBody => request.response_body.is_some(),
+            Self::Headers => {
+                !request.request_headers.is_empty() || !request.response_headers.is_empty()
+            }
+            Self::Replay => request.replay_count > 0,
+            Self::Error => request
+                .status_code
+                .map(|status| status >= 400)
+                .unwrap_or(false),
+            Self::Pending => request.status_code.is_none(),
+        }
+    }
+}
+
+fn fast_filter_for(input: &str) -> Option<FastRequestFilter> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Some(FastRequestFilter::default());
+    }
+
+    let mut filter = FastRequestFilter::default();
+    for token in input.split_whitespace() {
+        if let Some(value) = token.strip_prefix("method:") {
+            if !is_simple_fast_value(value) || filter.method.is_some() {
+                return None;
+            }
+            filter.method = Some(value.to_ascii_lowercase());
+        } else if let Some(value) = token.strip_prefix("type:") {
+            if !is_simple_fast_value(value) || filter.resource_type.is_some() {
+                return None;
+            }
+            filter.resource_type = Some(value.to_ascii_lowercase());
+        } else if let Some(value) = token.strip_prefix("status:") {
+            if filter.status.is_some() {
+                return None;
+            }
+            filter.status = Some(FastStatusFilter::parse(&value.to_ascii_lowercase())?);
+        } else if let Some(value) = token.strip_prefix("has:") {
+            filter
+                .has
+                .push(FastHasFilter::parse(&value.to_ascii_lowercase())?);
+        } else if let Some(value) = token.strip_prefix("duration:") {
+            if filter.duration.is_some() {
+                return None;
+            }
+            filter.duration = parse_threshold(value, |_| None);
+            filter.duration?;
+        } else if let Some(value) = token.strip_prefix("size:") {
+            if filter.size.is_some() {
+                return None;
+            }
+            filter.size = parse_threshold(value, byte_multiplier);
+            filter.size?;
+        } else {
+            return None;
+        }
+    }
+    Some(filter)
+}
+
+fn is_simple_fast_value(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+}
+
+fn contains_ignore_ascii_case(value: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > value.len() {
+        return false;
+    }
+    value.as_bytes().windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle.as_bytes())
+            .all(|(left, right)| left.eq_ignore_ascii_case(right))
+    })
 }
 
 pub(super) struct TuiRequestFilter {
@@ -342,6 +570,21 @@ impl TuiRequestFilter {
             && self.has.is_empty()
             && self.duration.is_none()
             && self.size.is_none()
+    }
+
+    fn depends_on_response(&self) -> bool {
+        !self.raw_terms.is_empty()
+            || self.status.is_some()
+            || self.mime.is_some()
+            || self.header.is_some()
+            || self.body.is_some()
+            || self.response_body.is_some()
+            || self.duration.is_some()
+            || self.size.is_some()
+            || self
+                .has
+                .iter()
+                .any(|value| !matches!(value.as_str(), "reqbody" | "request-body"))
     }
 }
 

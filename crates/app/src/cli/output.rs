@@ -51,8 +51,13 @@ pub(super) fn print_help() {
     println!("  faro storage get <localStorage|sessionStorage> <key> [--json]");
     println!("  faro cookies list [--json]");
     println!("  faro sessions list [--json]");
+    println!(
+        "  faro sessions prune <session-id> [--max-requests N] [--max-repeated N] [--max-console N] [--max-ws N] [--vacuum] [--json]"
+    );
     println!("  faro sessions compact [--vacuum] [--json]");
     println!("  faro sessions nuke --yes [--vacuum] [--json]");
+    println!("  faro db stats [--json]");
+    println!("  faro db compact [--vacuum] [--json]");
     println!("  faro replay <request-id> [--json]");
     println!("  faro sql <readonly-query> [--json]");
     println!();

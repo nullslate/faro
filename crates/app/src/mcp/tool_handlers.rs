@@ -6,6 +6,7 @@ mod browser;
 mod capture;
 mod data;
 mod helpers;
+mod maintenance;
 mod requests;
 mod sessions;
 
@@ -14,6 +15,9 @@ use capture::capture_url_tool;
 use data::{
     get_storage_item_tool, list_console_errors_tool, list_cookies_tool, list_storage_items_tool,
     list_websocket_frames_tool, run_readonly_sql_tool,
+};
+use maintenance::{
+    get_db_stats_tool, list_heavy_sessions_tool, list_repeated_requests_tool, prune_session_tool,
 };
 use requests::{
     copy_request_as_curl_tool, get_replay_tool, get_request_tool, get_response_body_tool,
@@ -35,6 +39,10 @@ pub(super) fn call_tool(options: &CliOptions, params: &Value) -> anyhow::Result<
         "capture_url" => capture_url_tool(options, args),
         "list_sessions" => list_sessions_tool(&options.db_path),
         "get_session" => get_session_tool(&options.db_path, args),
+        "get_db_stats" => get_db_stats_tool(&options.db_path, args),
+        "list_heavy_sessions" => list_heavy_sessions_tool(&options.db_path, args),
+        "list_repeated_requests" => list_repeated_requests_tool(&options.db_path, args),
+        "prune_session" => prune_session_tool(&options.db_path, args),
         "delete_all_sessions" => delete_all_sessions_tool(&options.db_path, args),
         "list_requests" => list_requests_tool(&options.db_path, args),
         "get_request" => get_request_tool(options, args),

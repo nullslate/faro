@@ -35,24 +35,24 @@ impl WorkbenchState {
     }
 
     pub(crate) fn refresh_replays_for_request(&mut self, request_id: &str) -> anyhow::Result<()> {
-        let Some(request_index) = self
-            .requests
-            .iter()
-            .position(|request| request.request.id == request_id)
-        else {
+        let Some(request_index) = self.request_indices_by_id.get(request_id).copied() else {
             return Ok(());
         };
         let store = Store::open(&self.db_path)
             .with_context(|| format!("open database {}", self.db_path.display()))?;
-        let Some(request) = self.requests.get_mut(request_index) else {
-            return Ok(());
-        };
-        request.replays = store
+        let replays = store
             .replays_for_request(request_id)?
             .into_iter()
             .map(|record| replay_view_for_record(&store, record))
             .collect::<anyhow::Result<Vec<_>>>()?;
+        let Some(request) = self.requests.get_mut(request_index) else {
+            return Ok(());
+        };
+        let had_replays = !request.replays.is_empty();
+        request.replays = replays;
+        let has_replays = !request.replays.is_empty();
         request.details_loaded = true;
+        self.update_replayed_request_stats(had_replays, has_replays);
         self.sync_selected_replay_index();
         Ok(())
     }
@@ -64,17 +64,19 @@ impl WorkbenchState {
         response_body: Option<String>,
         replays: Vec<ReplayView>,
     ) {
-        let Some(request) = self
-            .requests
-            .iter_mut()
-            .find(|request| request.request.id == request_id)
-        else {
+        let Some(request_index) = self.request_indices_by_id.get(request_id).copied() else {
             return;
         };
+        let Some(request) = self.requests.get_mut(request_index) else {
+            return;
+        };
+        let had_replays = !request.replays.is_empty();
         request.request_body = request_body;
         request.response_body = response_body;
         request.replays = replays;
+        let has_replays = !request.replays.is_empty();
         request.details_loaded = true;
+        self.update_replayed_request_stats(had_replays, has_replays);
         self.sync_selected_replay_index();
     }
 
@@ -85,29 +87,53 @@ impl WorkbenchState {
     ) -> anyhow::Result<()> {
         let store = Store::open(&self.db_path)
             .with_context(|| format!("open database {}", self.db_path.display()))?;
-        let Some(request) = self.requests.get_mut(request_index) else {
+        let Some(request) = self.requests.get(request_index) else {
             return Ok(());
         };
 
-        request.request_body =
-            body_text_for_ref(&store, request.request.request_body_ref.as_deref())
-                .with_context(|| format!("load request body for {}", request.request.id))?;
-        request.response_body = request
+        let request_body_ref = request.request.request_body_ref.clone();
+        let response_body_ref = request
             .response
             .as_ref()
-            .and_then(|response| response.body_ref.as_deref())
+            .and_then(|response| response.body_ref.clone());
+        let request_record_id = request.request.id.clone();
+
+        let request_body = body_text_for_ref(&store, request_body_ref.as_deref())
+            .with_context(|| format!("load request body for {request_record_id}"))?;
+        let response_body = response_body_ref
+            .as_deref()
             .map(|body_id| body_text_for_ref(&store, Some(body_id)))
             .transpose()
-            .with_context(|| format!("load response body for {}", request.request.id))?
+            .with_context(|| format!("load response body for {request_record_id}"))?
             .flatten();
-        request.replays = store
+        let replays = store
             .replays_for_request(request_id)?
             .into_iter()
             .map(|record| replay_view_for_record(&store, record))
             .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let Some(request) = self.requests.get_mut(request_index) else {
+            return Ok(());
+        };
+        let had_replays = !request.replays.is_empty();
+        request.request_body = request_body;
+        request.response_body = response_body;
+        request.replays = replays;
+        let has_replays = !request.replays.is_empty();
         request.details_loaded = true;
+        self.update_replayed_request_stats(had_replays, has_replays);
         self.sync_selected_replay_index();
         Ok(())
+    }
+
+    fn update_replayed_request_stats(&mut self, had_replays: bool, has_replays: bool) {
+        match (had_replays, has_replays) {
+            (false, true) => self.request_stats.replayed += 1,
+            (true, false) => {
+                self.request_stats.replayed = self.request_stats.replayed.saturating_sub(1);
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn sync_selected_replay_index(&mut self) {

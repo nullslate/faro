@@ -1,4 +1,5 @@
-use super::state::{self, ReplayView, WorkbenchState};
+use super::layout::LayoutMode;
+use super::state::{self, FocusPane, ReplayView, WorkbenchState, WorkbenchView};
 use anyhow::Context;
 use faro_store::Store;
 use std::collections::HashSet;
@@ -64,6 +65,9 @@ pub(super) fn maybe_start_selected_detail_load(
 }
 
 fn selected_detail_load_task(app: &WorkbenchState) -> Option<DetailLoadTask> {
+    if !selected_details_are_visible(app) {
+        return None;
+    }
     let request = app.selected_request()?;
     if request.details_loaded {
         return None;
@@ -77,6 +81,16 @@ fn selected_detail_load_task(app: &WorkbenchState) -> Option<DetailLoadTask> {
             .as_ref()
             .and_then(|response| response.body_ref.clone()),
     })
+}
+
+fn selected_details_are_visible(app: &WorkbenchState) -> bool {
+    if app.view != WorkbenchView::Network {
+        return false;
+    }
+    match app.layout_mode {
+        LayoutMode::Normal => true,
+        LayoutMode::Focused => matches!(app.focus, FocusPane::Detail | FocusPane::Body),
+    }
 }
 
 fn run_detail_load_task(task: DetailLoadTask) -> anyhow::Result<DetailLoadResult> {

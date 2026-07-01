@@ -137,8 +137,8 @@ fn render_network_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
 }
 
 fn render_network_compact_bar(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let stats = RequestStats::from(app);
-    let mut traffic_line = status_meter_line(&stats);
+    let stats = &app.request_stats;
+    let mut traffic_line = status_meter_line(stats);
     let mut spans = vec![
         Span::styled("filter ", label_style()),
         Span::raw(if app.request_filter.is_empty() {
@@ -191,8 +191,8 @@ fn render_network_compact_bar(frame: &mut ratatui::Frame, area: Rect, app: &Work
 }
 
 fn render_stats_panel(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
-    let stats = RequestStats::from(app);
-    let mut traffic_line = status_meter_line(&stats);
+    let stats = &app.request_stats;
+    let mut traffic_line = status_meter_line(stats);
     traffic_line.spans.extend([
         Span::raw("  "),
         Span::styled("pending ", muted_style()),
@@ -239,73 +239,6 @@ fn render_stats_panel(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchSta
             .style(Style::default().fg(GB_FG)),
         area,
     );
-}
-
-struct RequestStats {
-    ok: usize,
-    redirect: usize,
-    client: usize,
-    server: usize,
-    pending: usize,
-    replayed: usize,
-    slow: usize,
-    total_size: i64,
-    avg_duration_ms: Option<i64>,
-    max_duration_ms: Option<i64>,
-}
-
-impl RequestStats {
-    fn from(app: &WorkbenchState) -> Self {
-        let mut stats = Self {
-            ok: 0,
-            redirect: 0,
-            client: 0,
-            server: 0,
-            pending: 0,
-            replayed: 0,
-            slow: 0,
-            total_size: 0,
-            avg_duration_ms: None,
-            max_duration_ms: None,
-        };
-        let mut duration_total = 0_i64;
-        let mut duration_count = 0_i64;
-
-        for request in &app.requests {
-            match request.status_code() {
-                Some(200..=299) => stats.ok += 1,
-                Some(300..=399) => stats.redirect += 1,
-                Some(400..=499) => stats.client += 1,
-                Some(500..=599) => stats.server += 1,
-                None => stats.pending += 1,
-                Some(_) => {}
-            }
-            if !request.replays.is_empty() {
-                stats.replayed += 1;
-            }
-            if let Some(size) = request
-                .response
-                .as_ref()
-                .and_then(|response| response.body_size)
-            {
-                stats.total_size += size;
-            }
-            if let Some(duration) = request.duration_ms() {
-                duration_total += duration;
-                duration_count += 1;
-                stats.max_duration_ms =
-                    Some(stats.max_duration_ms.unwrap_or(duration).max(duration));
-                if duration >= 500 {
-                    stats.slow += 1;
-                }
-            }
-        }
-        if duration_count > 0 {
-            stats.avg_duration_ms = Some(duration_total / duration_count);
-        }
-
-        stats
-    }
 }
 
 fn status_meter_line(stats: &RequestStats) -> Line<'static> {

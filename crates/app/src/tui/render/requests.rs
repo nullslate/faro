@@ -1,6 +1,8 @@
 use super::*;
+use std::borrow::Cow;
 
 pub(super) fn render(frame: &mut ratatui::Frame, area: Rect, app: &mut WorkbenchState) {
+    let render_started = std::time::Instant::now();
     let highlight_terms = filter_highlight_terms(&app.request_filter);
     let rows = if app.filtered_request_rows.is_empty() {
         vec![
@@ -40,24 +42,25 @@ pub(super) fn render(frame: &mut ratatui::Frame, area: Rect, app: &mut Workbench
                 let theme = &app.config.theme;
                 let base_style = fade.base_style(theme);
                 let request = app.requests.get(*index)?;
-                let resource_type = request
-                    .request
-                    .resource_type
-                    .clone()
-                    .unwrap_or_else(|| "-".to_string());
-                let resource_label = resource_label(&resource_type);
-                let tree_meta = app.request_tree_meta(*index);
+                let resource_type = request.request.resource_type.as_deref().unwrap_or("-");
+                let resource_label = resource_label(resource_type);
+                let tree_meta = app.request_tree_metas.get(*index);
                 let can_drill_down = app.request_can_drill_down(*index);
-                let domain = domain_for_url(&request.request.url);
-                let path = app
-                    .request_route_remainder(*index)
-                    .unwrap_or_else(|| path_for_url(&request.request.url));
+                let domain = tree_meta
+                    .map(|meta| Cow::Borrowed(meta.domain.as_str()))
+                    .unwrap_or_else(|| Cow::Owned(domain_for_url(&request.request.url)));
+                let route_remainder = app.request_route_remainder(*index);
+                let path = route_remainder
+                    .as_deref()
+                    .map(Cow::Borrowed)
+                    .or_else(|| tree_meta.map(|meta| Cow::Borrowed(meta.path.as_str())))
+                    .unwrap_or_else(|| Cow::Owned(path_for_url(&request.request.url)));
                 Some(
                     Row::new([
                         Cell::from(request_tree_marker(
                             row_index,
                             total,
-                            tree_meta.as_ref(),
+                            tree_meta,
                             can_drill_down,
                             fade,
                             theme,
@@ -69,10 +72,11 @@ pub(super) fn render(frame: &mut ratatui::Frame, area: Rect, app: &mut Workbench
                         Cell::from(highlight_text(&request.request.method, &highlight_terms))
                             .style(method_style(&request.request.method, fade, theme)),
                         Cell::from(resource_type_line(resource_label, &highlight_terms))
-                            .style(resource_style(&resource_type, fade, theme)),
-                        Cell::from(highlight_text(&domain, &highlight_terms))
+                            .style(resource_style(resource_type, fade, theme)),
+                        Cell::from(highlight_text(domain.as_ref(), &highlight_terms))
                             .style(fade.secondary_style(theme)),
-                        Cell::from(highlight_text(&path, &highlight_terms)).style(base_style),
+                        Cell::from(highlight_text(path.as_ref(), &highlight_terms))
+                            .style(base_style),
                         Cell::from(match request.duration_ms() {
                             Some(duration) => {
                                 let mut spans = vec![Span::styled(
@@ -136,4 +140,9 @@ pub(super) fn render(frame: &mut ratatui::Frame, area: Rect, app: &mut Workbench
 
     let mut visible_state = visible_request_table_state(app, visible_request_rows(area));
     frame.render_stateful_widget(table, area, &mut visible_state);
+    app.perf.last_request_render_ms = render_started.elapsed().as_millis();
+    app.perf.max_request_render_ms = app
+        .perf
+        .max_request_render_ms
+        .max(app.perf.last_request_render_ms);
 }

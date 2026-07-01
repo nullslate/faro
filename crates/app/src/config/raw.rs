@@ -1,4 +1,4 @@
-use super::{AppConfig, RedactionConfig, Theme, UiConfig};
+use super::{AppConfig, RedactionConfig, RetentionConfig, Theme, UiConfig};
 use anyhow::{Context, bail};
 use ratatui::style::Color;
 use serde::Deserialize;
@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 struct RawConfig {
     #[serde(default)]
     app: RawAppConfig,
+    #[serde(default)]
+    retention: RawRetentionConfig,
     #[serde(default)]
     ui: RawUiConfig,
     #[serde(default)]
@@ -23,8 +25,18 @@ struct RawAppConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
+struct RawRetentionConfig {
+    max_requests_per_session: Option<usize>,
+    max_repeated_requests_per_url: Option<usize>,
+    max_console_logs_per_session: Option<usize>,
+    max_websocket_frames_per_session: Option<usize>,
+    prune_interval_requests: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 struct RawUiConfig {
     bottom_fade_rows: Option<usize>,
+    max_body_tree_items: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -71,16 +83,51 @@ impl RawConfig {
         Ok(AppConfig {
             db_path: resolve_db_path(db_path, config_dir),
             launch_on_start: self.app.launch_on_start.unwrap_or(defaults.launch_on_start),
+            retention: self.retention.resolve(defaults.retention),
             ui: UiConfig {
                 bottom_fade_rows: self
                     .ui
                     .bottom_fade_rows
                     .unwrap_or(defaults.ui.bottom_fade_rows)
                     .clamp(0, 8),
+                max_body_tree_items: self
+                    .ui
+                    .max_body_tree_items
+                    .unwrap_or(defaults.ui.max_body_tree_items)
+                    .clamp(100, 100_000),
             },
             redaction: self.redaction.resolve(defaults.redaction),
             theme: self.theme.resolve(defaults.theme)?,
         })
+    }
+}
+
+impl RawRetentionConfig {
+    fn resolve(self, defaults: RetentionConfig) -> RetentionConfig {
+        let max_requests_per_session = self
+            .max_requests_per_session
+            .unwrap_or(defaults.max_requests_per_session)
+            .clamp(100, 100_000);
+        let max_repeated_requests_per_url = self
+            .max_repeated_requests_per_url
+            .unwrap_or(defaults.max_repeated_requests_per_url)
+            .min(max_requests_per_session);
+        RetentionConfig {
+            max_requests_per_session,
+            max_repeated_requests_per_url,
+            max_console_logs_per_session: self
+                .max_console_logs_per_session
+                .unwrap_or(defaults.max_console_logs_per_session)
+                .clamp(100, 100_000),
+            max_websocket_frames_per_session: self
+                .max_websocket_frames_per_session
+                .unwrap_or(defaults.max_websocket_frames_per_session)
+                .clamp(100, 500_000),
+            prune_interval_requests: self
+                .prune_interval_requests
+                .unwrap_or(defaults.prune_interval_requests)
+                .clamp(25, max_requests_per_session),
+        }
     }
 }
 
@@ -233,5 +280,34 @@ fn parse_color(value: &str) -> anyhow::Result<Color> {
         "light_magenta" => Ok(Color::LightMagenta),
         "light_cyan" => Ok(Color::LightCyan),
         _ => bail!("unsupported color"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_config;
+
+    #[test]
+    fn parses_ui_body_tree_limit() -> anyhow::Result<()> {
+        let config = parse_config(
+            r#"
+            [ui]
+            bottom_fade_rows = 12
+            max_body_tree_items = 42
+            "#,
+            None,
+        )?;
+
+        assert_eq!(config.ui.bottom_fade_rows, 8);
+        assert_eq!(config.ui.max_body_tree_items, 100);
+        Ok(())
+    }
+
+    #[test]
+    fn defaults_ui_body_tree_limit_when_missing() -> anyhow::Result<()> {
+        let config = parse_config("", None)?;
+
+        assert_eq!(config.ui.max_body_tree_items, 2_000);
+        Ok(())
     }
 }

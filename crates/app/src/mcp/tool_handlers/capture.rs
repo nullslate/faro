@@ -13,6 +13,9 @@ pub(super) fn capture_url_tool(options: &CliOptions, args: &Value) -> anyhow::Re
         url,
         attach_port: options.attach_port,
         launch_port: options.launch_port,
+        max_requests_per_session: options.max_requests_per_session,
+        max_repeated_requests_per_url: options.max_repeated_requests_per_url,
+        prune_interval_requests: options.prune_interval_requests,
     };
     let updates = faro_cdp::spawn_capture(capture_options);
     let deadline = Instant::now() + duration;

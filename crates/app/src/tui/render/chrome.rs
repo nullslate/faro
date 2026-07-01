@@ -134,10 +134,7 @@ fn console_error_badge(app: &WorkbenchState) -> String {
 }
 
 fn console_error_count(app: &WorkbenchState) -> usize {
-    app.console_logs
-        .iter()
-        .filter(|log| matches!(log.level, ConsoleLevel::Error | ConsoleLevel::Fatal))
-        .count()
+    app.console_stats.errors
 }
 
 fn compact_header_spans(app: &WorkbenchState) -> Vec<Span<'static>> {
@@ -176,21 +173,34 @@ fn site_domain(app: &WorkbenchState) -> String {
 }
 
 fn favicon_spans(app: &WorkbenchState) -> Vec<Span<'static>> {
-    let Some((mime, data)) = captured_favicon(app) else {
+    let Some(favicon) = captured_favicon(app) else {
         return vec![Span::styled("[icon]", muted_style()), Span::raw("  ")];
     };
     match terminal_image_protocol() {
-        Some(ImageProtocol::Kitty) => vec![Span::raw(kitty_favicon_escape(data)), Span::raw(" ")],
-        Some(ImageProtocol::ITerm) => vec![Span::raw(iterm_favicon_escape(data)), Span::raw(" ")],
+        Some(ImageProtocol::Kitty) => {
+            vec![
+                Span::raw(kitty_favicon_escape(&favicon.data)),
+                Span::raw(" "),
+            ]
+        }
+        Some(ImageProtocol::ITerm) => {
+            vec![
+                Span::raw(iterm_favicon_escape(&favicon.data)),
+                Span::raw(" "),
+            ]
+        }
         None => vec![
             Span::styled("[favicon]", Style::default().fg(GB_GREEN)),
-            Span::raw(format!(" {mime} ")),
+            Span::raw(format!(" {} ", favicon.mime)),
         ],
     }
 }
 
-fn captured_favicon(app: &WorkbenchState) -> Option<(&str, &str)> {
-    app.requests.iter().find_map(|request| {
+fn captured_favicon(app: &WorkbenchState) -> Option<CapturedFavicon> {
+    if let Some(cached) = app.captured_favicon_cache.borrow().as_ref() {
+        return cached.clone();
+    }
+    let favicon = app.requests.iter().find_map(|request| {
         let mime = request
             .response
             .as_ref()
@@ -206,8 +216,13 @@ fn captured_favicon(app: &WorkbenchState) -> Option<(&str, &str)> {
             return None;
         }
         let body = request.response_body.as_deref()?;
-        parse_image_data_url(body)
-    })
+        parse_image_data_url(body).map(|(_, data)| CapturedFavicon {
+            mime: mime.to_string(),
+            data: data.to_string(),
+        })
+    });
+    app.captured_favicon_cache.replace(Some(favicon.clone()));
+    favicon
 }
 pub(super) fn render_status(frame: &mut ratatui::Frame, area: Rect, app: &WorkbenchState) {
     let keys = match app.input_mode {

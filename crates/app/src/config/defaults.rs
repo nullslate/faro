@@ -7,9 +7,24 @@ db_path = "faro.db"
 # Start capture immediately for URL launches instead of waiting for "o".
 launch_on_start = false
 
+[retention]
+# Keep only the newest requests per session. Older request rows, responses,
+# bodies, replay rows, and request-scoped events are pruned automatically.
+max_requests_per_session = 5000
+# Keep only the newest repeated entries for one method + URL + resource type.
+# Set to 0 to disable repeat pruning.
+max_repeated_requests_per_url = 250
+# Keep console and websocket streams bounded per session.
+max_console_logs_per_session = 2000
+max_websocket_frames_per_session = 5000
+# While capturing, prune at most every N newly observed requests.
+prune_interval_requests = 250
+
 [ui]
 # Number of rows affected by the dark bottom overlay in the request tree.
 bottom_fade_rows = 3
+# Maximum JSON/HTML body tree nodes rendered before showing a truncation row.
+max_body_tree_items = 2000
 
 [redaction]
 # Case-insensitive header names redacted from share/curl output.

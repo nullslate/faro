@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS responses (
 );
 
 CREATE INDEX IF NOT EXISTS idx_responses_request_received ON responses(request_id, received_at, id);
+CREATE INDEX IF NOT EXISTS idx_responses_received_request ON responses(received_at, request_id, id);
 
 CREATE TABLE IF NOT EXISTS replays (
     id TEXT PRIMARY KEY,

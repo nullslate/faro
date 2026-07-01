@@ -1,5 +1,6 @@
 use super::*;
 use crate::tui::render::detail::content::detail_not_loaded_lines;
+use crate::tui::state::ResponseBodyLineCache;
 
 mod image;
 mod sse;
@@ -12,26 +13,54 @@ pub(crate) use image::{
 pub(crate) use sse::parse_sse_events;
 pub(crate) use sse::{is_sse_request, sse_body_lines};
 
-pub(super) fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
+pub(super) struct ResponseBodyPanel {
+    pub(super) lines: Vec<Line<'static>>,
+    pub(super) pre_scrolled: bool,
+}
+
+impl ResponseBodyPanel {
+    fn new(lines: Vec<Line<'static>>) -> Self {
+        Self {
+            lines,
+            pre_scrolled: false,
+        }
+    }
+}
+
+pub(super) fn response_body_panel_lines(
+    app: &WorkbenchState,
+    visible_rows: usize,
+) -> ResponseBodyPanel {
     let Some(request) = app.selected_request() else {
-        return empty_state_lines("no request selected", "capture traffic or move with j/k");
+        return ResponseBodyPanel::new(empty_state_lines(
+            "no request selected",
+            "capture traffic or move with j/k",
+        ));
     };
 
     if !request.details_loaded {
-        return detail_not_loaded_lines();
+        return ResponseBodyPanel::new(detail_not_loaded_lines());
     }
 
     if request.response_body.is_some() {
         if is_image_request(request) {
-            return image_preview_lines(request);
+            return ResponseBodyPanel::new(image_preview_lines(request));
         }
         if is_sse_request(request) {
-            return sse_body_lines(request);
+            return ResponseBodyPanel::new(sse_body_lines(request));
         }
-        if app.focus == FocusPane::Body && !app.body_tree_items().is_empty() {
-            return body_tree_lines(app);
+        let body_tree_items = app.body_tree_items();
+        if app.focus == FocusPane::Body && !body_tree_items.is_empty() {
+            return ResponseBodyPanel {
+                lines: body_tree_lines(app, visible_rows, &body_tree_items),
+                pre_scrolled: true,
+            };
         }
-        return response_body_content_lines(request, app.focus == FocusPane::Body);
+        return ResponseBodyPanel::new(cached_response_body_content_lines(
+            app,
+            request,
+            app.focus == FocusPane::Body,
+        ));
     }
 
     let mut lines = vec![
@@ -77,11 +106,14 @@ pub(super) fn response_body_panel_lines(app: &WorkbenchState) -> Vec<Line<'stati
         ]));
     }
 
-    lines
+    ResponseBodyPanel::new(lines)
 }
 
-pub(super) fn body_tree_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
-    let items = app.body_tree_items();
+pub(super) fn body_tree_lines(
+    app: &WorkbenchState,
+    visible_rows: usize,
+    items: &[BodyTreeItem],
+) -> Vec<Line<'static>> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -94,11 +126,17 @@ pub(super) fn body_tree_lines(app: &WorkbenchState) -> Vec<Line<'static>> {
         ]),
         Line::raw(""),
     ];
+    let item_budget = visible_rows.saturating_sub(lines.len()).max(1);
     lines.extend(
         items
             .iter()
+            .skip(app.body_scroll as usize)
+            .take(item_budget)
             .enumerate()
-            .map(|(index, item)| body_tree_line(item, index == app.body_tree_selected)),
+            .map(|(visible_index, item)| {
+                let index = app.body_scroll as usize + visible_index;
+                body_tree_line(item, index == app.body_tree_selected)
+            }),
     );
     lines
 }
@@ -156,13 +194,50 @@ pub(crate) fn response_body_content_lines(
     request: &RequestView,
     active: bool,
 ) -> Vec<Line<'static>> {
-    let body = render_response_body(request);
-    let lines = syntax_body_lines_for_request(request, body);
-    if active {
-        numbered_lines(lines)
-    } else {
-        lines.into_iter().take(80).collect()
+    response_body_content_lines_uncached(request, active)
+}
+
+fn cached_response_body_content_lines(
+    app: &WorkbenchState,
+    request: &RequestView,
+    active: bool,
+) -> Vec<Line<'static>> {
+    let response_body_ref = request
+        .response
+        .as_ref()
+        .and_then(|response| response.body_ref.clone());
+    let response_body_len = request
+        .response_body
+        .as_ref()
+        .map(String::len)
+        .unwrap_or_default();
+    if let Some(cache) = app.response_body_line_cache.borrow().as_ref()
+        && cache.request_id == request.request.id
+        && cache.response_body_ref == response_body_ref
+        && cache.response_body_len == response_body_len
+        && cache.active == active
+    {
+        return cache.lines.clone();
     }
+    let lines = response_body_content_lines_uncached(request, active);
+    app.response_body_line_cache
+        .replace(Some(ResponseBodyLineCache {
+            request_id: request.request.id.clone(),
+            response_body_ref,
+            response_body_len,
+            active,
+            lines: lines.clone(),
+        }));
+    lines
+}
+
+fn response_body_content_lines_uncached(request: &RequestView, active: bool) -> Vec<Line<'static>> {
+    let mut body = render_response_body(request);
+    if !active {
+        body = body.lines().take(80).collect::<Vec<_>>().join("\n");
+    }
+    let lines = syntax_body_lines_for_request(request, body);
+    if active { numbered_lines(lines) } else { lines }
 }
 
 fn render_response_body(request: &RequestView) -> String {

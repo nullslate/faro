@@ -1,4 +1,4 @@
-use super::request_filter::TuiRequestFilter;
+use super::request_filter::CompiledRequestFilter;
 use faro_core::Header;
 use std::collections::{HashMap, HashSet};
 
@@ -11,12 +11,14 @@ pub(crate) enum RequestSort {
     Method,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct RequestQueryMeta<'a> {
     pub(crate) domain: &'a str,
     pub(crate) path: &'a str,
     pub(crate) ancestor_keys: &'a [String],
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct RequestQueryItem<'a> {
     pub(crate) index: usize,
     pub(crate) id: &'a str,
@@ -51,75 +53,69 @@ pub(crate) struct RequestQueryResult {
     pub(crate) route_descendant_counts: HashMap<String, usize>,
 }
 
+#[cfg(test)]
 pub(crate) fn query_requests(
     requests: &[RequestQueryItem<'_>],
     options: &RequestQueryOptions<'_>,
 ) -> RequestQueryResult {
-    let filter = TuiRequestFilter::parse(options.filter);
-    let mut indices = requests
-        .iter()
-        .filter_map(|request| {
-            let sql_matches = options
-                .sql_request_filter_ids
-                .is_none_or(|ids| ids.contains(request.id));
-            let route_matches = request_in_active_route(request, options.active_route_group);
-            let not_hidden_by_clear = options
-                .hidden_before
-                .is_none_or(|hidden_before| request.started_at > hidden_before);
-            (sql_matches && route_matches && filter.matches(request) && not_hidden_by_clear)
-                .then_some(request.index)
-        })
-        .collect::<Vec<_>>();
+    query_requests_iter(requests.iter().copied(), options)
+}
 
-    let by_index = if matches!(options.sort, RequestSort::Started) && !options.sort_descending {
-        None
-    } else {
-        let by_index = requests
-            .iter()
-            .map(|request| (request.index, request))
-            .collect::<HashMap<_, _>>();
+pub(crate) fn query_requests_iter<'a>(
+    requests: impl IntoIterator<Item = RequestQueryItem<'a>>,
+    options: &RequestQueryOptions<'_>,
+) -> RequestQueryResult {
+    let filter = CompiledRequestFilter::parse(options.filter);
+    let requests = requests.into_iter();
+    let (capacity, _) = requests.size_hint();
+    let mut matching_items = Vec::new();
+    let mut route_descendant_counts = HashMap::new();
+    let mut indices = Vec::with_capacity(capacity.min(16_384));
+
+    for request in requests {
+        let sql_matches = options
+            .sql_request_filter_ids
+            .is_none_or(|ids| ids.contains(request.id));
+        let route_matches = request_in_active_route(&request, options.active_route_group);
+        let not_hidden_by_clear = options
+            .hidden_before
+            .is_none_or(|hidden_before| request.started_at > hidden_before);
+        if !(sql_matches && route_matches && filter.matches(&request) && not_hidden_by_clear) {
+            continue;
+        }
+
+        if matches!(options.sort, RequestSort::Started) {
+            indices.push(request.index);
+            if let Some(meta) = &request.meta {
+                for group in meta.ancestor_keys {
+                    increment_route_count(&mut route_descendant_counts, group);
+                }
+            }
+        } else {
+            matching_items.push(request);
+        }
+    }
+
+    if matches!(options.sort, RequestSort::Started) {
         if matches!(options.sort, RequestSort::Started) && options.sort_descending {
             indices.reverse();
-        } else {
-            indices.sort_by(|left, right| {
-                let Some(left) = by_index.get(left) else {
-                    return std::cmp::Ordering::Equal;
-                };
-                let Some(right) = by_index.get(right) else {
-                    return std::cmp::Ordering::Equal;
-                };
-                let ordering = options.sort.compare(left, right);
-                if options.sort_descending {
-                    ordering.reverse()
-                } else {
-                    ordering
-                }
-            });
         }
-        Some(by_index)
-    };
-
-    let mut route_descendant_counts = HashMap::new();
-    for index in &indices {
-        let request = match &by_index {
-            Some(by_index) => {
-                let Some(request) = by_index.get(index) else {
-                    continue;
-                };
-                *request
+    } else {
+        matching_items.sort_by(|left, right| {
+            let ordering = options.sort.compare(left, right);
+            if options.sort_descending {
+                ordering.reverse()
+            } else {
+                ordering
             }
-            None => {
-                let Some(request) = requests.get(*index) else {
-                    continue;
-                };
-                request
+        });
+        for request in matching_items {
+            indices.push(request.index);
+            if let Some(meta) = &request.meta {
+                for group in meta.ancestor_keys {
+                    increment_route_count(&mut route_descendant_counts, group);
+                }
             }
-        };
-        let Some(meta) = &request.meta else {
-            continue;
-        };
-        for group in meta.ancestor_keys {
-            *route_descendant_counts.entry(group.clone()).or_insert(0) += 1;
         }
     }
 
@@ -127,6 +123,14 @@ pub(crate) fn query_requests(
         rows: indices.clone(),
         indices,
         route_descendant_counts,
+    }
+}
+
+fn increment_route_count(counts: &mut HashMap<String, usize>, group: &str) {
+    if let Some(count) = counts.get_mut(group) {
+        *count += 1;
+    } else {
+        counts.insert(group.to_string(), 1);
     }
 }
 

@@ -10,6 +10,50 @@ pub struct SessionSummaryCounts {
     pub cookie_events: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRowCount {
+    pub table: String,
+    pub rows: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BodyStorageStats {
+    pub bodies: usize,
+    pub total_bytes: u64,
+    pub inline_bytes: u64,
+    pub external_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStorageStats {
+    pub id: String,
+    pub created_at: i64,
+    pub name: Option<String>,
+    pub root_url: Option<String>,
+    pub requests: usize,
+    pub console_errors: usize,
+    pub replays: usize,
+    pub websocket_frames: usize,
+    pub storage_events: usize,
+    pub cookie_events: usize,
+    pub bodies: usize,
+    pub body_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepeatedRequestGroup {
+    pub session_id: String,
+    pub root_url: Option<String>,
+    pub method: String,
+    pub resource_type: Option<String>,
+    pub url: String,
+    pub requests: usize,
+    pub error_responses: usize,
+    pub body_bytes: u64,
+    pub first_started_at: i64,
+    pub last_started_at: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScriptRecord {
     pub id: String,

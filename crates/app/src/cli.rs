@@ -19,7 +19,7 @@ pub(crate) use store::{current_storage_items, latest_cookies, open_store};
 
 use capture::handle_capture;
 use commands::{
-    handle_console, handle_cookies, handle_replay, handle_request, handle_requests,
+    handle_console, handle_cookies, handle_db, handle_replay, handle_request, handle_requests,
     handle_sessions, handle_sql, handle_storage,
 };
 use options::parse_args;
@@ -44,6 +44,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         "storage" => handle_storage(&options.db_path, args),
         "cookies" => handle_cookies(&options.db_path, args),
         "sessions" => handle_sessions(&options.db_path, args),
+        "db" => handle_db(&options.db_path, args),
         "replay" => handle_replay(&options.db_path, args),
         "sql" => handle_sql(&options.db_path, args),
         "show" => {
@@ -79,6 +80,9 @@ fn run_capture_tui(options: CliOptions, url: &str, app_config: AppConfig) -> any
         url: url.to_string(),
         attach_port: options.attach_port,
         launch_port: options.launch_port,
+        max_requests_per_session: app_config.retention.max_requests_per_session,
+        max_repeated_requests_per_url: app_config.retention.max_repeated_requests_per_url,
+        prune_interval_requests: app_config.retention.prune_interval_requests,
     };
     let run_config = if options.attach_port.is_some() || options.launch_on_start {
         tui::RunConfig::capturing(faro_cdp::spawn_capture(capture_options))

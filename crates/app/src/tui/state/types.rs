@@ -1,5 +1,6 @@
 use crate::query::RequestSort;
-use faro_core::{ReplayRecord, RequestRecord, ResponseRecord, Session};
+use faro_core::{ReplayRecord, RequestRecord, ResponseRecord, Session, UnixMillis};
+use ratatui::text::Line;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionView {
@@ -202,6 +203,46 @@ pub(crate) struct RouteSummary {
 }
 
 #[derive(Debug, Clone, Default)]
+pub(crate) struct RequestStats {
+    pub(crate) ok: usize,
+    pub(crate) redirect: usize,
+    pub(crate) client: usize,
+    pub(crate) server: usize,
+    pub(crate) pending: usize,
+    pub(crate) replayed: usize,
+    pub(crate) slow: usize,
+    pub(crate) total_size: i64,
+    pub(crate) avg_duration_ms: Option<i64>,
+    pub(crate) max_duration_ms: Option<i64>,
+    pub(crate) duration_total_ms: i64,
+    pub(crate) duration_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ConsoleStats {
+    pub(crate) errors: usize,
+    pub(crate) warnings: usize,
+    pub(crate) evals: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct WebSocketStats {
+    pub(crate) sent: usize,
+    pub(crate) received: usize,
+    pub(crate) bytes: usize,
+    pub(crate) connections: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct LiveWatermarks {
+    pub(crate) max_started_at: UnixMillis,
+    pub(crate) max_completed_at: UnixMillis,
+    pub(crate) max_response_at: UnixMillis,
+    pub(crate) max_console_ts: UnixMillis,
+    pub(crate) max_websocket_ts: UnixMillis,
+}
+
+#[derive(Debug, Clone, Default)]
 pub(crate) struct PerfStats {
     pub(crate) frame_count: u64,
     pub(crate) last_frame_ms: u128,
@@ -210,6 +251,16 @@ pub(crate) struct PerfStats {
     pub(crate) max_tick_ms: u128,
     pub(crate) last_poll_ms: u128,
     pub(crate) max_poll_ms: u128,
+    pub(crate) last_db_refresh_ms: u128,
+    pub(crate) max_db_refresh_ms: u128,
+    pub(crate) last_live_merge_ms: u128,
+    pub(crate) max_live_merge_ms: u128,
+    pub(crate) last_filter_ms: u128,
+    pub(crate) max_filter_ms: u128,
+    pub(crate) last_tree_build_ms: u128,
+    pub(crate) max_tree_build_ms: u128,
+    pub(crate) last_request_render_ms: u128,
+    pub(crate) max_request_render_ms: u128,
     pub(crate) last_capture_drain_ms: u128,
     pub(crate) last_replay_drain_ms: u128,
     pub(crate) last_detail_drain_ms: u128,
@@ -283,6 +334,41 @@ pub(crate) struct BodyTreeItem {
     pub(crate) value: Option<String>,
     pub(crate) expandable: bool,
     pub(crate) collapsed: bool,
+}
+
+pub(crate) struct BodyTreeCache {
+    pub(crate) request_id: String,
+    pub(crate) response_body_ref: Option<String>,
+    pub(crate) response_body_len: usize,
+    pub(crate) max_items: usize,
+    pub(crate) collapsed_keys: Vec<String>,
+    pub(crate) items: Vec<BodyTreeItem>,
+}
+
+pub(crate) struct ResponseBodyLineCache {
+    pub(crate) request_id: String,
+    pub(crate) response_body_ref: Option<String>,
+    pub(crate) response_body_len: usize,
+    pub(crate) active: bool,
+    pub(crate) lines: Vec<Line<'static>>,
+}
+
+pub(crate) struct WebSocketDetailLineCache {
+    pub(crate) frame_id: String,
+    pub(crate) payload_len: usize,
+    pub(crate) lines: Vec<Line<'static>>,
+}
+
+pub(crate) struct ConsoleDetailLineCache {
+    pub(crate) log_id: String,
+    pub(crate) message_len: usize,
+    pub(crate) lines: Vec<Line<'static>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CapturedFavicon {
+    pub(crate) mime: String,
+    pub(crate) data: String,
 }
 
 pub(crate) struct ReplayView {

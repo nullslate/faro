@@ -2,10 +2,13 @@ use super::*;
 use crate::config::AppConfig;
 use crate::tui::state::{InputMode, SortMode};
 use faro_core::{
-    CookieEventRecord, CookieRecord, CookieSnapshotRecord, ReplayRecord, RequestRecord,
-    ResponseRecord, StorageEntry, StorageEventRecord, StorageSnapshotRecord,
+    ConsoleLevel, ConsoleLog, CookieEventRecord, CookieRecord, CookieSnapshotRecord, ReplayRecord,
+    RequestRecord, RequestStatus, ResponseRecord, StorageEntry, StorageEventRecord,
+    StorageSnapshotRecord, WebSocketFrameDirection, WebSocketFrameRecord,
 };
 use faro_store::ScriptRecord;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::widgets::{ListState, TableState};
 use std::path::PathBuf;
 
@@ -21,10 +24,17 @@ fn state_with_storage(
         sessions: Vec::new(),
         session_state: ListState::default(),
         requests: Vec::new(),
+        request_indices_by_id: std::collections::HashMap::new(),
         request_tree_metas: Vec::new(),
+        request_route_descendant_counts: std::collections::HashMap::new(),
         filtered_request_indices: Vec::new(),
         filtered_request_rows: Vec::new(),
+        filtered_request_positions_by_id: std::collections::HashMap::new(),
         filtered_route_descendant_counts: std::collections::HashMap::new(),
+        request_stats: Default::default(),
+        live_watermarks: Default::default(),
+        live_requests_since_prune: 0,
+        active_route_summary_cache: None,
         collapsed_request_groups: std::collections::HashSet::new(),
         active_request_route_group: None,
         sql_request_filter_ids: None,
@@ -32,11 +42,18 @@ fn state_with_storage(
         requests_hidden_before: None,
         console_logs: Vec::new(),
         filtered_console_indices: Vec::new(),
+        filtered_console_positions_by_id: std::collections::HashMap::new(),
         console_hidden_before: None,
+        console_stats: Default::default(),
+        console_detail_line_cache: std::cell::RefCell::new(None),
         websocket_frames: Vec::new(),
         filtered_websocket_indices: Vec::new(),
+        filtered_websocket_positions_by_id: std::collections::HashMap::new(),
         websocket_state: ListState::default(),
         websocket_detail_scroll: 0,
+        websocket_detail_line_cache: std::cell::RefCell::new(None),
+        websocket_stats: Default::default(),
+        websocket_connection_ids: std::collections::HashSet::new(),
         storage_events,
         storage_snapshots,
         storage_selected: 0,
@@ -61,6 +78,9 @@ fn state_with_storage(
         body_tree_selected: 0,
         body_tree_selected_key: None,
         collapsed_body_nodes: std::collections::HashSet::new(),
+        body_tree_cache: std::cell::RefCell::new(None),
+        response_body_line_cache: std::cell::RefCell::new(None),
+        captured_favicon_cache: std::cell::RefCell::new(None),
         storage_scroll: 0,
         cookie_scroll: 0,
         input_mode: InputMode::Normal,
@@ -120,6 +140,267 @@ fn state_with_cookies(
         cookie_snapshots,
         ..state_with_storage(Vec::new(), Vec::new())
     }
+}
+
+fn synthetic_request_view(index: usize) -> RequestView {
+    let method = if index.is_multiple_of(9) {
+        "POST"
+    } else {
+        "GET"
+    };
+    let path = match index % 6 {
+        0 => format!("/api/users/{index}/profile"),
+        1 => format!("/api/organizations/{}/members", index % 400),
+        2 => format!("/assets/vendor-{index:x}.js"),
+        3 => format!("/assets/chunk-{index:x}.css"),
+        4 => "/graphql".to_string(),
+        _ => format!("/events/stream/{}", index % 40),
+    };
+    let mut request = RequestRecord::started(
+        "session".to_string(),
+        Some("tab".to_string()),
+        Some("run".to_string()),
+        method,
+        format!("http://localhost:5173{path}?q={index}"),
+    );
+    request.id = format!("request-{index:06}");
+    request.started_at = index as i64;
+    request.completed_at = Some(index as i64 + (index % 750) as i64);
+    request.status = RequestStatus::Complete;
+    request.resource_type = Some(
+        match index % 6 {
+            0 | 1 => "fetch",
+            2 => "script",
+            3 => "stylesheet",
+            4 => "xhr",
+            _ => "eventsource",
+        }
+        .to_string(),
+    );
+
+    let mut response = ResponseRecord::received(request.id.clone());
+    response.id = format!("response-{index:06}");
+    response.received_at = request.completed_at.unwrap_or(request.started_at);
+    response.status_code = Some(if index.is_multiple_of(97) {
+        500
+    } else if index.is_multiple_of(41) {
+        404
+    } else {
+        200
+    });
+    response.mime_type = Some(
+        match request.resource_type.as_deref() {
+            Some("script") => "application/javascript",
+            Some("stylesheet") => "text/css",
+            Some("eventsource") => "text/event-stream",
+            _ => "application/json",
+        }
+        .to_string(),
+    );
+    response.body_size = Some(((index % 200_000) + 128) as i64);
+
+    RequestView {
+        request,
+        response: Some(response),
+        request_body: None,
+        response_body: None,
+        replays: Vec::new(),
+        details_loaded: false,
+    }
+}
+
+fn synthetic_request_meta(request: &RequestView) -> RequestTreeMeta {
+    let domain = domain_for_url(&request.request.url);
+    let path = path_for_url(&request.request.url);
+    let path_segment_source = path
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(path.as_str())
+        .to_string();
+    let segments = path_segment_source
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut ancestor_keys = Vec::new();
+    for end in 1..segments.len() {
+        ancestor_keys.push(format!("{domain}/{}", segments[..end].join("/")));
+    }
+    RequestTreeMeta {
+        domain,
+        path,
+        depth: segments.len(),
+        group_key: None,
+        ancestor_keys,
+        has_children: false,
+        child_count: 0,
+        collapsed: false,
+    }
+}
+
+fn large_render_state(request_count: usize) -> WorkbenchState {
+    let mut state = state_with_storage(Vec::new(), Vec::new());
+    state.requests = (0..request_count).map(synthetic_request_view).collect();
+    state.request_tree_metas = state.requests.iter().map(synthetic_request_meta).collect();
+    state.filtered_request_indices = (0..request_count).collect();
+    state.filtered_request_rows = state.filtered_request_indices.clone();
+    state.filtered_request_positions_by_id = state
+        .requests
+        .iter()
+        .enumerate()
+        .map(|(index, request)| (request.request.id.clone(), index))
+        .collect();
+    state.table_state.select(Some(0));
+    state
+}
+
+fn render_perf_terminal(width: u16, height: u16) -> anyhow::Result<Terminal<TestBackend>> {
+    Terminal::new(TestBackend::new(width, height)).map_err(Into::into)
+}
+
+fn log_render_perf(label: &str, elapsed: std::time::Duration) {
+    println!("{label}: {elapsed:?}");
+}
+
+#[test]
+#[ignore = "render perf harness; run with cargo test render_perf -- --ignored --nocapture"]
+fn render_perf_request_table_many_requests() -> anyhow::Result<()> {
+    let mut state = large_render_state(25_000);
+    let mut terminal = render_perf_terminal(180, 60)?;
+    let started = std::time::Instant::now();
+    terminal.draw(|frame| {
+        requests::render(frame, frame.area(), &mut state);
+    })?;
+    log_render_perf(
+        "render_perf request table 25k backing rows",
+        started.elapsed(),
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "render perf harness; run with cargo test render_perf -- --ignored --nocapture"]
+fn render_perf_large_json_body_tree() -> anyhow::Result<()> {
+    let mut state = large_render_state(1);
+    let items = (0usize..1_500)
+        .map(|index| {
+            format!(
+                r#"{{"id":{index},"name":"item-{index}","active":{},"url":"https://example.com/assets/{index}.js"}}"#,
+                index.is_multiple_of(2)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    if let Some(request) = state.requests.get_mut(0) {
+        request.details_loaded = true;
+        request.response_body = Some(format!(r#"{{"items":[{items}]}}"#));
+    }
+    state.focus = FocusPane::Body;
+    state.table_state.select(Some(0));
+
+    let mut terminal = render_perf_terminal(180, 60)?;
+    let started = std::time::Instant::now();
+    terminal.draw(|frame| {
+        detail::render_body(frame, frame.area(), &state);
+    })?;
+    log_render_perf("render_perf large json body tree", started.elapsed());
+    Ok(())
+}
+
+#[test]
+#[ignore = "render perf harness; run with cargo test render_perf -- --ignored --nocapture"]
+fn render_perf_console_large_stream() -> anyhow::Result<()> {
+    let mut state = state_with_storage(Vec::new(), Vec::new());
+    state.view = WorkbenchView::Console;
+    state.focus = FocusPane::Console;
+    state.console_logs = (0usize..10_000)
+        .map(|index| {
+            let mut log = ConsoleLog::new(
+                "session".to_string(),
+                Some("tab".to_string()),
+                Some("run".to_string()),
+                if index.is_multiple_of(97) {
+                    ConsoleLevel::Error
+                } else if index.is_multiple_of(17) {
+                    ConsoleLevel::Warning
+                } else {
+                    ConsoleLevel::Info
+                },
+                format!("console message {index} with some repeated diagnostic context"),
+                Some("http://localhost:5173/main.js".to_string()),
+                Some(index as i64),
+            );
+            log.id = format!("console-{index:06}");
+            log.ts = index as i64;
+            log
+        })
+        .collect();
+    state.filtered_console_indices = (0..state.console_logs.len()).collect();
+    state.filtered_console_positions_by_id = state
+        .console_logs
+        .iter()
+        .enumerate()
+        .map(|(index, log)| (log.id.clone(), index))
+        .collect();
+    state.console_state.select(Some(9_999));
+
+    let mut terminal = render_perf_terminal(180, 60)?;
+    let started = std::time::Instant::now();
+    terminal.draw(|frame| {
+        console::render(frame, frame.area(), &mut state);
+    })?;
+    log_render_perf("render_perf console 10k backing logs", started.elapsed());
+    Ok(())
+}
+
+#[test]
+#[ignore = "render perf harness; run with cargo test render_perf -- --ignored --nocapture"]
+fn render_perf_websocket_large_stream() -> anyhow::Result<()> {
+    let mut state = state_with_storage(Vec::new(), Vec::new());
+    state.view = WorkbenchView::WebSockets;
+    state.focus = FocusPane::WebSockets;
+    state.websocket_frames = (0usize..10_000)
+        .map(|index| {
+            let mut frame = WebSocketFrameRecord::new(
+                "session".to_string(),
+                Some("tab".to_string()),
+                Some("run".to_string()),
+                format!("ws-{}", index % 20),
+                if index.is_multiple_of(2) {
+                    WebSocketFrameDirection::Sent
+                } else {
+                    WebSocketFrameDirection::Received
+                },
+                1,
+                false,
+                format!(
+                    r#"{{"event":"message","index":{index},"payload":"{}"}}"#,
+                    "x".repeat(80)
+                ),
+            );
+            frame.id = format!("websocket-{index:06}");
+            frame.ts = index as i64;
+            frame
+        })
+        .collect();
+    state.filtered_websocket_indices = (0..state.websocket_frames.len()).collect();
+    state.filtered_websocket_positions_by_id = state
+        .websocket_frames
+        .iter()
+        .enumerate()
+        .map(|(index, frame)| (frame.id.clone(), index))
+        .collect();
+    state.websocket_state.select(Some(9_999));
+
+    let mut terminal = render_perf_terminal(180, 60)?;
+    let started = std::time::Instant::now();
+    terminal.draw(|frame| {
+        websockets::render(frame, frame.area(), &mut state);
+    })?;
+    log_render_perf(
+        "render_perf websocket 10k backing frames",
+        started.elapsed(),
+    );
+    Ok(())
 }
 
 #[test]

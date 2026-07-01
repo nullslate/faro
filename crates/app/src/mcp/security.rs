@@ -15,6 +15,7 @@ pub(super) fn audit_tool_call(name: &str, args: &Value) {
             name,
             "capture_url"
                 | "delete_all_sessions"
+                | "prune_session"
                 | "replay_request"
                 | "evaluate_js"
                 | "reload_page"
@@ -60,7 +61,12 @@ pub(super) fn require_tool_permission(
 ) -> anyhow::Result<()> {
     if matches!(
         name,
-        "capture_url" | "delete_all_sessions" | "replay_request" | "evaluate_js" | "reload_page"
+        "capture_url"
+            | "delete_all_sessions"
+            | "prune_session"
+            | "replay_request"
+            | "evaluate_js"
+            | "reload_page"
     ) && !options.mcp_allow_mutation
     {
         bail!(

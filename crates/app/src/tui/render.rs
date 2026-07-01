@@ -17,9 +17,10 @@ mod workspace;
 
 use super::layout::{DensityMode, LayoutMode};
 use super::state::{
-    BodyTreeItem, CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane, InputMode,
-    ReplayView, RequestTreeMeta, RequestView, WorkbenchState, WorkbenchView, domain_for_url,
-    formatted_request_body, formatted_response_body, path_for_url, websocket_opcode_label,
+    BodyTreeItem, CapturedFavicon, CurrentCookieEntry, CurrentStorageEntry, DetailTab, FocusPane,
+    InputMode, ReplayView, RequestStats, RequestTreeMeta, RequestView, WorkbenchState,
+    WorkbenchView, domain_for_url, formatted_request_body, formatted_response_body, path_for_url,
+    websocket_opcode_label,
 };
 use crate::config::Theme;
 #[cfg(test)]

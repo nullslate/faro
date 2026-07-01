@@ -1,4 +1,6 @@
-use super::{BodyTreeItem, WorkbenchState, formatted_response_body, looks_like_json};
+use super::{
+    BodyTreeCache, BodyTreeItem, WorkbenchState, formatted_response_body, looks_like_json,
+};
 use std::collections::HashSet;
 
 impl WorkbenchState {
@@ -100,44 +102,112 @@ impl WorkbenchState {
         let Some(body) = request.response_body.as_deref() else {
             return Vec::new();
         };
+        let response_body_ref = request
+            .response
+            .as_ref()
+            .and_then(|response| response.body_ref.clone());
+        let collapsed_keys = sorted_collapsed_body_keys(&self.collapsed_body_nodes);
+        if let Some(cache) = self.body_tree_cache.borrow().as_ref()
+            && cache.request_id == request.request.id
+            && cache.response_body_ref == response_body_ref
+            && cache.response_body_len == body.len()
+            && cache.max_items == self.config.ui.max_body_tree_items
+            && cache.collapsed_keys == collapsed_keys
+        {
+            return cache.items.clone();
+        }
         let mime = request
             .response
             .as_ref()
             .and_then(|response| response.mime_type.as_deref());
-        if looks_like_json(mime, body)
-            && let Ok(value) = serde_json::from_str::<serde_json::Value>(body)
-        {
-            let mut items = Vec::new();
-            push_json_tree_item(
-                &mut items,
-                &self.collapsed_body_nodes,
-                "$".to_string(),
-                "$".to_string(),
-                &value,
-                0,
-            );
-            return items;
-        }
-        if mime.map(|mime| mime.contains("html")).unwrap_or(false) {
-            return html_body_tree_items(body, &self.collapsed_body_nodes);
-        }
-        Vec::new()
+        let items = build_body_tree_items(
+            mime,
+            body,
+            &self.collapsed_body_nodes,
+            self.config.ui.max_body_tree_items,
+        );
+        self.body_tree_cache.replace(Some(BodyTreeCache {
+            request_id: request.request.id.clone(),
+            response_body_ref,
+            response_body_len: body.len(),
+            max_items: self.config.ui.max_body_tree_items,
+            collapsed_keys,
+            items: items.clone(),
+        }));
+        items
     }
+}
+
+fn build_body_tree_items(
+    mime: Option<&str>,
+    body: &str,
+    collapsed_body_nodes: &HashSet<String>,
+    max_items: usize,
+) -> Vec<BodyTreeItem> {
+    if looks_like_json(mime, body)
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(body)
+    {
+        let mut items = Vec::new();
+        let mut context = BodyTreeBuildContext {
+            collapsed: collapsed_body_nodes,
+            truncated: false,
+            max_items,
+        };
+        push_json_tree_item(
+            &mut items,
+            &mut context,
+            "$".to_string(),
+            "$".to_string(),
+            &value,
+            0,
+        );
+        if context.truncated {
+            items.push(BodyTreeItem {
+                key: "$.__faro_truncated".to_string(),
+                depth: 0,
+                label: "truncated".to_string(),
+                value: Some(format!("showing first {max_items} nodes")),
+                expandable: false,
+                collapsed: false,
+            });
+        }
+        return items;
+    }
+    if mime.map(|mime| mime.contains("html")).unwrap_or(false) {
+        return html_body_tree_items(body, collapsed_body_nodes, max_items);
+    }
+    Vec::new()
+}
+
+struct BodyTreeBuildContext<'a> {
+    collapsed: &'a HashSet<String>,
+    truncated: bool,
+    max_items: usize,
+}
+
+fn sorted_collapsed_body_keys(collapsed: &HashSet<String>) -> Vec<String> {
+    let mut keys = collapsed.iter().cloned().collect::<Vec<_>>();
+    keys.sort();
+    keys
 }
 
 fn push_json_tree_item(
     items: &mut Vec<BodyTreeItem>,
-    collapsed: &HashSet<String>,
+    context: &mut BodyTreeBuildContext<'_>,
     key: String,
     label: String,
     value: &serde_json::Value,
     depth: usize,
 ) {
+    if items.len() >= context.max_items {
+        context.truncated = true;
+        return;
+    }
     let expandable = matches!(
         value,
         serde_json::Value::Object(_) | serde_json::Value::Array(_)
     );
-    let collapsed_here = collapsed.contains(&key);
+    let collapsed_here = context.collapsed.contains(&key);
     let value_label = json_tree_value_label(value);
 
     items.push(BodyTreeItem {
@@ -156,9 +226,12 @@ fn push_json_tree_item(
     match value {
         serde_json::Value::Object(map) => {
             for (child_key, child_value) in map {
+                if context.truncated {
+                    break;
+                }
                 push_json_tree_item(
                     items,
-                    collapsed,
+                    context,
                     format!("{key}.{child_key}"),
                     child_key.clone(),
                     child_value,
@@ -168,9 +241,12 @@ fn push_json_tree_item(
         }
         serde_json::Value::Array(values) => {
             for (index, child_value) in values.iter().enumerate() {
+                if context.truncated {
+                    break;
+                }
                 push_json_tree_item(
                     items,
-                    collapsed,
+                    context,
                     format!("{key}[{index}]"),
                     format!("[{index}]"),
                     child_value,
@@ -204,13 +280,28 @@ fn compact_string(value: &str, max: usize) -> String {
         + "…"
 }
 
-fn html_body_tree_items(body: &str, collapsed: &HashSet<String>) -> Vec<BodyTreeItem> {
+fn html_body_tree_items(
+    body: &str,
+    collapsed: &HashSet<String>,
+    max_items: usize,
+) -> Vec<BodyTreeItem> {
     let mut items = Vec::new();
     let mut depth = 0_usize;
     let mut cursor = 0_usize;
     let mut sequence = Vec::<usize>::new();
     let mut hidden_depth = None::<usize>;
     while cursor < body.len() {
+        if items.len() >= max_items {
+            items.push(BodyTreeItem {
+                key: "html.__faro_truncated".to_string(),
+                depth: 0,
+                label: "truncated".to_string(),
+                value: Some(format!("showing first {max_items} nodes")),
+                expandable: false,
+                collapsed: false,
+            });
+            break;
+        }
         let remaining = &body[cursor..];
         let Some(tag_start_offset) = remaining.find('<') else {
             push_html_tree_text(&mut items, hidden_depth, depth, &mut sequence, remaining);

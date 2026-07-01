@@ -16,6 +16,7 @@ use defaults::{
 pub struct AppConfig {
     pub db_path: PathBuf,
     pub launch_on_start: bool,
+    pub retention: RetentionConfig,
     pub ui: UiConfig,
     pub redaction: RedactionConfig,
     pub theme: Theme,
@@ -26,6 +27,7 @@ impl Default for AppConfig {
         Self {
             db_path: PathBuf::from("faro.db"),
             launch_on_start: false,
+            retention: RetentionConfig::default(),
             ui: UiConfig::default(),
             redaction: RedactionConfig::default(),
             theme: Theme::default(),
@@ -34,14 +36,37 @@ impl Default for AppConfig {
 }
 
 #[derive(Debug, Clone)]
+pub struct RetentionConfig {
+    pub max_requests_per_session: usize,
+    pub max_repeated_requests_per_url: usize,
+    pub max_console_logs_per_session: usize,
+    pub max_websocket_frames_per_session: usize,
+    pub prune_interval_requests: usize,
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            max_requests_per_session: 5_000,
+            max_repeated_requests_per_url: 250,
+            max_console_logs_per_session: 2_000,
+            max_websocket_frames_per_session: 5_000,
+            prune_interval_requests: 250,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct UiConfig {
     pub bottom_fade_rows: usize,
+    pub max_body_tree_items: usize,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             bottom_fade_rows: 3,
+            max_body_tree_items: 2_000,
         }
     }
 }
