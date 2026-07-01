@@ -11,7 +11,7 @@ resolver = "3"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-repository = ""
+repository = "https://github.com/nullslate/faro"
 
 [workspace.dependencies]
 anyhow = "1.0"

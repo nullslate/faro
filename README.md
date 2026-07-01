@@ -1,5 +1,9 @@
 # Faro
 
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-2024-orange.svg)](Cargo.toml)
+[![MCP](https://img.shields.io/badge/MCP-ready-89b482.svg)](agents/faro/)
+
 Faro is a terminal-first browser debugging workbench for frontend and full-stack development.
 
 It launches or attaches to a Chromium-family browser through the Chrome DevTools Protocol, captures browser observations into SQLite, and lets humans and agents inspect the result through a TUI, CLI, SQL, or MCP.
@@ -11,6 +15,8 @@ Browser -> Chrome DevTools Protocol -> Faro capture -> SQLite -> TUI / CLI / MCP
 ```
 
 Faro does not embed Chromium and does not render web pages in the terminal. It controls a real browser and keeps a durable local debugging database.
+
+Links: [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [MIT License](LICENSE)
 
 ## Features
 
@@ -38,7 +44,7 @@ Prerequisites:
 - Optional: `nvim` or another `$EDITOR` for body editing, SQL, and console evaluation.
 
 ```sh
-git clone <repo-url> faro
+git clone https://github.com/nullslate/faro.git
 cd faro
 cargo install --path crates/app
 ```

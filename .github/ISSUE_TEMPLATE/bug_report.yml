@@ -1,0 +1,51 @@
+name: Bug Report
+description: Report a reproducible Faro bug
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please remove private URLs, cookies, tokens, request bodies, and production data before submitting.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction Steps
+      description: How can we reproduce it?
+      placeholder: |
+        1. Run `faro ...`
+        2. Open ...
+        3. Press ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        - OS:
+        - Terminal:
+        - Faro version/commit:
+        - Browser:
+        - Rust version, if building from source:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs Or Screenshots
+      description: Paste sanitized logs or screenshots. Do not include secrets.
+      render: text
