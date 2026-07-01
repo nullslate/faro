@@ -17,6 +17,10 @@ Start the Faro MCP server over stdio:
 }
 ```
 
+By default, MCP is read-only. Start Faro with `--mcp-allow-mutation` only when the user explicitly wants agents to launch captures, delete sessions, replay requests, reload pages, or evaluate JavaScript. Start with `--mcp-allow-sensitive` only when the user explicitly wants raw credentials/request bodies in generated curl commands.
+
+Body-returning MCP tools may truncate large bodies according to `redaction.mcp_body_limit_bytes` in Faro config. Check returned truncation metadata before assuming the body is complete.
+
 Use a specific database if needed:
 
 ```json
@@ -32,7 +36,7 @@ Use a specific database if needed:
 
 ## Workflow
 
-1. Capture a page before inspecting it:
+1. Capture a page before inspecting it. Prefer having the user start Faro normally. Use `capture_url` only when MCP was started with `--mcp-allow-mutation`:
 
 ```text
 capture_url({ "url": "https://example.com", "duration": "15s" })
@@ -78,13 +82,15 @@ list_replays({ "session_id": "..." })
 get_replay({ "replay_id": "...", "include_body": true })
 ```
 
+`copy_request_as_curl` is redacted by default. Use `include_sensitive: true` only when MCP was started with `--mcp-allow-sensitive` and the user explicitly needs raw credentials/body. `replay_request` requires `--mcp-allow-mutation`.
+
 7. Use SQL for ad hoc analysis. SQL must be read-only:
 
 ```text
 run_readonly_sql({ "query": "select id, method, url, status_code from requests where status_code >= 500" })
 ```
 
-8. When `capture_url` returns an attached `websocket_url`, live page actions are available:
+8. When `capture_url` returns an attached `websocket_url`, live page actions are available only if MCP was started with `--mcp-allow-mutation`:
 
 ```text
 evaluate_js({ "websocket_url": "...", "expression": "document.title" })
@@ -110,7 +116,9 @@ faro sql "select * from requests where status_code >= 500" --json
 ## Notes
 
 - Route filters accept plain prefixes like `/api/users`, one-segment params like `/api/users/:id`, and wildcards like `/api/*`.
-- Prefer `copy_request_as_curl` when sharing a reproduction with a human.
-- Prefer `replay_request` only when the user explicitly wants to send the request again.
+- Prefer `copy_request_as_curl` when sharing a reproduction with a human; it is redacted by default.
+- Prefer `replay_request` only when the user explicitly wants to send the request again and MCP mutation is enabled.
 - Do not run mutating SQL. Faro rejects writes, but tools should still ask for read-only queries.
-- Project next up: replay polish, including selectable replay history and compare-any replay diffs.
+- Mutating/browser MCP tools require `--mcp-allow-mutation`; sensitive curl output requires `--mcp-allow-sensitive`.
+- Security-relevant MCP/TUI actions are appended to Faro's `audit.jsonl` in the config directory.
+- Redaction rules are configurable in `config.toml` under `[redaction]`.

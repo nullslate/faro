@@ -1,6 +1,8 @@
 mod cli;
 mod config;
 mod mcp;
+mod query;
+mod services;
 mod tui;
 
 #[tokio::main]

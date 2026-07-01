@@ -209,11 +209,25 @@ Use `--db <path>` with any command to target a specific SQLite database.
 
 ## MCP And Agent Integration
 
-Faro includes a stdio MCP server so coding agents can inspect the same browser capture database that the TUI and CLI use. The server is DB-first: tools read from SQLite, replay captured requests, and can start short capture sessions, but they do not scrape the terminal UI.
+Faro includes a stdio MCP server so coding agents can inspect the same browser capture database that the TUI and CLI use. The server is DB-first: tools read from SQLite and do not scrape the terminal UI. Mutating or browser-driving tools are disabled by default.
 
 ```sh
 faro mcp
 ```
+
+Enable mutating tools only when you want an agent to launch/attach capture, delete sessions, replay requests, reload pages, or evaluate JavaScript:
+
+```sh
+faro --mcp-allow-mutation mcp
+```
+
+`copy_request_as_curl` redacts sensitive headers and omits request bodies by default. To allow agents to request full credentials and bodies with `include_sensitive: true`, start MCP with:
+
+```sh
+faro --mcp-allow-sensitive mcp
+```
+
+MCP body-returning tools cap returned body text using `redaction.mcp_body_limit_bytes` from `config.toml` and include truncation metadata when a body is clipped.
 
 Example MCP config:
 
@@ -243,13 +257,14 @@ Most users should point their agent at the default config database. Use an expli
 
 ### Typical Agent Workflow
 
-1. Start Faro normally while reproducing the issue, or let the agent run `capture_url`.
+1. Start Faro normally while reproducing the issue. If you intentionally enabled `--mcp-allow-mutation`, the agent can also run `capture_url`.
 2. Have the agent call `list_sessions` and pick the right `session_id` when more than one capture exists.
 3. Ask the agent to list failing or slow requests with `list_requests`.
 4. Have it inspect a request with `get_request` and `get_response_body`.
 5. Let it check console failures with `list_console_errors`.
-6. Use `copy_request_as_curl` or `replay_request` when the bug needs a reproducible backend call.
-7. Use `run_readonly_sql` for deeper analysis across the capture database.
+6. Use `copy_request_as_curl` for a redacted reproduction command. Enable sensitive MCP mode only when the raw body/credentials are intentionally needed.
+7. Use `replay_request` only after starting MCP with `--mcp-allow-mutation`.
+8. Use `run_readonly_sql` for deeper analysis across the capture database.
 
 Useful prompts:
 
@@ -269,10 +284,10 @@ Use Faro read-only SQL to group captured requests by domain and status code. Hig
 
 | Tool | Purpose |
 | --- | --- |
-| `capture_url` | Launch or attach to Chromium and capture a URL for a bounded duration. |
+| `capture_url` | Launch or attach to Chromium and capture a URL for a bounded duration. Requires `--mcp-allow-mutation`. |
 | `list_sessions` | List capture sessions with request/error/replay/storage counts. |
 | `get_session` | Get one capture session and summary counts. |
-| `delete_all_sessions` | Delete all sessions and cascaded captured data; requires `confirm: true`. |
+| `delete_all_sessions` | Delete all sessions and cascaded captured data; requires `confirm: true` and `--mcp-allow-mutation`. |
 | `list_requests` | List captured requests, with route/filter support for narrowing results. Accepts optional `session_id`. |
 | `get_request` | Fetch request metadata, headers, response metadata, and body references. |
 | `get_response_body` | Load a captured response body by request id. |
@@ -283,11 +298,31 @@ Use Faro read-only SQL to group captured requests by domain and status code. Hig
 | `list_storage_items` | List current localStorage/sessionStorage items. Accepts optional `session_id` and filters. |
 | `get_storage_item` | Read a current localStorage or sessionStorage item. |
 | `list_cookies` | List current captured cookies. Accepts optional `session_id`. |
-| `copy_request_as_curl` | Return a full `curl` command for a captured request. |
-| `replay_request` | Replay a captured request and persist replay metadata. |
-| `evaluate_js` | Evaluate JavaScript through a CDP websocket URL returned by `capture_url`. |
-| `reload_page` | Reload the attached page through a CDP websocket URL returned by `capture_url`. |
+| `copy_request_as_curl` | Return a redacted `curl` command by default. `include_sensitive: true` requires `--mcp-allow-sensitive`. |
+| `replay_request` | Replay a captured request and persist replay metadata. Requires `--mcp-allow-mutation`. |
+| `evaluate_js` | Evaluate JavaScript through a CDP websocket URL returned by `capture_url`. Requires `--mcp-allow-mutation`. |
+| `reload_page` | Reload the attached page through a CDP websocket URL returned by `capture_url`. Requires `--mcp-allow-mutation`. |
 | `run_readonly_sql` | Run guarded read-only SQL against the Faro SQLite database. |
+
+### Security Defaults
+
+Faro is designed to capture sensitive browser debugging data, so sharing and agent access are guarded:
+
+- Redacted share bundles hide sensitive headers and redact matching JSON body fields before copying.
+- MCP runs read-only by default for risky tools. Browser-driving and mutating tools require `--mcp-allow-mutation`.
+- MCP curl output is redacted by default. Raw credentials and bodies require both `include_sensitive: true` and `--mcp-allow-sensitive`.
+- MCP body responses are size-capped by `redaction.mcp_body_limit_bytes`.
+- Security-relevant actions are appended to `audit.jsonl` in the Faro config directory.
+
+Redaction rules are configurable in `config.toml`:
+
+```toml
+[redaction]
+header_names = ["authorization", "cookie", "set-cookie", "x-api-key"]
+json_key_patterns = ["auth", "email", "password", "secret", "token"]
+text_patterns = ["bearer ", "token=", "password=", "secret="]
+mcp_body_limit_bytes = 262144
+```
 
 The same workflows are available from the CLI when an agent cannot use MCP:
 

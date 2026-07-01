@@ -24,23 +24,25 @@ pub(crate) fn path_for_url(url: &str) -> String {
         .unwrap_or_else(|| "/".to_string())
 }
 
-pub(super) fn request_tree_parts(request: &RequestView) -> Vec<String> {
-    let mut parts = vec![domain_for_url(&request.request.url)];
-    parts.extend(normalized_path_segments(&path_for_url(
-        &request.request.url,
-    )));
-    parts
-}
-
 pub(super) fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestTreeMeta> {
     let mut descendant_counts = HashMap::new();
-    for group in requests.iter().flat_map(request_group_keys) {
-        *descendant_counts.entry(group).or_insert(0) += 1;
-    }
-    requests
+    let parts_by_request = requests
         .iter()
         .map(|request| {
-            let parts = request_tree_parts(request);
+            let domain = domain_for_url(&request.request.url);
+            let path = path_for_url(&request.request.url);
+            let mut parts = vec![domain.clone()];
+            parts.extend(normalized_path_segments(&path));
+            for group in ancestor_keys_for_parts(&parts) {
+                *descendant_counts.entry(group).or_insert(0) += 1;
+            }
+            (domain, path, parts)
+        })
+        .collect::<Vec<_>>();
+
+    parts_by_request
+        .into_iter()
+        .map(|(domain, path, parts)| {
             let group_key = group_key_for_parts(&parts);
             let ancestor_keys = ancestor_keys_for_parts(&parts);
             let child_count = group_key
@@ -48,6 +50,8 @@ pub(super) fn build_request_tree_metas(requests: &[RequestView]) -> Vec<RequestT
                 .and_then(|key| descendant_counts.get(key).copied())
                 .unwrap_or(0);
             RequestTreeMeta {
+                domain,
+                path,
                 depth: parts.len().saturating_sub(1),
                 group_key,
                 ancestor_keys,
@@ -87,11 +91,6 @@ fn is_dynamic_path_segment(segment: &str) -> bool {
 
 fn group_key_for_parts(parts: &[String]) -> Option<String> {
     (parts.len() > 1).then(|| parts.join("/"))
-}
-
-pub(super) fn request_group_keys(request: &RequestView) -> Vec<String> {
-    let parts = request_tree_parts(request);
-    ancestor_keys_for_parts(&parts)
 }
 
 fn ancestor_keys_for_parts(parts: &[String]) -> Vec<String> {
